@@ -1,0 +1,352 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile for World 1 social outings, including tastes/curiosities and active group metadata.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the user."
+        },
+        "username": {
+          "type": "string",
+          "description": "Display handle of the user (1-60 chars)."
+        },
+        "bio": {
+          "type": "string",
+          "description": "Short biography shown on the profile header."
+        },
+        "avatarUrl": {
+          "type": "string",
+          "description": "Avatar URI or preset identifier."
+        },
+        "curiosities": {
+          "type": "array",
+          "description": "List of up to 20 personal tastes, hobbies, or fun facts."
+        },
+        "groupId": {
+          "type": "string",
+          "description": "Active outing group identifier."
+        },
+        "groupInviteCode": {
+          "type": "string",
+          "description": "Shareable invitation code for the user's outing group."
+        },
+        "groupName": {
+          "type": "string",
+          "description": "Display name of the user's outing group."
+        },
+        "gamesHighScore": {
+          "type": "integer",
+          "description": "Cumulative mini-games score."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "username",
+        "bio",
+        "avatarUrl",
+        "curiosities",
+        "groupId",
+        "groupInviteCode",
+        "groupName",
+        "gamesHighScore",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Outing": {
+      "title": "Outing",
+      "description": "Scheduled group outing synced across the interactive calendar, live map, and RSVP list.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns/synced this outing record."
+        },
+        "groupId": {
+          "type": "string",
+          "description": "Group invitation code or ID associated with this outing."
+        },
+        "title": {
+          "type": "string",
+          "description": "Name of the outing (1-120 chars)."
+        },
+        "location": {
+          "type": "string",
+          "description": "Destination place name or address (1-200 chars)."
+        },
+        "meetingPoint": {
+          "type": "string",
+          "description": "Where everyone meets up before going (0-200 chars)."
+        },
+        "dateIso": {
+          "type": "string",
+          "description": "ISO date string YYYY-MM-DD (8-20 chars)."
+        },
+        "time": {
+          "type": "string",
+          "description": "24h time string HH:mm (1-20 chars)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["CONFIRMED", "PLANNED", "CANCELLED"],
+          "description": "Confirmation status controlling green double circle, gray circle, or red circle."
+        },
+        "budgetPerPerson": {
+          "type": "string",
+          "description": "Recommended money to bring per person."
+        },
+        "kitItems": {
+          "type": "string",
+          "description": "Kit de la Quedada: objects or materials to bring."
+        },
+        "additionalInfo": {
+          "type": "string",
+          "description": "Additional notes or instructions for the outing."
+        },
+        "placePhotoUrl": {
+          "type": "string",
+          "description": "Photo URI or preset key shown inside the circular map marker and outing card."
+        },
+        "destLat": {
+          "type": "number",
+          "description": "Latitude of the outing destination."
+        },
+        "destLng": {
+          "type": "number",
+          "description": "Longitude of the outing destination."
+        },
+        "meetLat": {
+          "type": "number",
+          "description": "Latitude of the group meeting point."
+        },
+        "meetLng": {
+          "type": "number",
+          "description": "Longitude of the group meeting point."
+        },
+        "rsvpYesCount": {
+          "type": "integer",
+          "description": "Count of members attending."
+        },
+        "rsvpMaybeCount": {
+          "type": "integer",
+          "description": "Count of members unsure."
+        },
+        "rsvpNoCount": {
+          "type": "integer",
+          "description": "Count of members not attending."
+        },
+        "myRsvp": {
+          "type": "string",
+          "enum": ["YES", "MAYBE", "NO", "NONE"],
+          "description": "Current user's attendance choice."
+        },
+        "albumPhotos": {
+          "type": "array",
+          "description": "Up to 20 photo/video memory URIs uploaded to this outing."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "ownerId",
+        "groupId",
+        "title",
+        "location",
+        "meetingPoint",
+        "dateIso",
+        "time",
+        "status",
+        "budgetPerPerson",
+        "kitItems",
+        "additionalInfo",
+        "placePhotoUrl",
+        "destLat",
+        "destLng",
+        "meetLat",
+        "meetLng",
+        "rsvpYesCount",
+        "rsvpMaybeCount",
+        "rsvpNoCount",
+        "myRsvp",
+        "albumPhotos",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GroupChatMessage": {
+      "title": "GroupChatMessage",
+      "description": "Social group chat message supporting text, voice notes, voice-to-text transcription, and shared outings.",
+      "type": "object",
+      "properties": {
+        "senderId": {
+          "type": "string",
+          "description": "UID of the message author."
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the message author."
+        },
+        "groupId": {
+          "type": "string",
+          "description": "Group ID or invite code."
+        },
+        "text": {
+          "type": "string",
+          "description": "Message text content."
+        },
+        "messageType": {
+          "type": "string",
+          "enum": ["TEXT", "VOICE", "OUTING_SHARE", "STORY_REACTION"],
+          "description": "Type of chat message."
+        },
+        "audioDurationSec": {
+          "type": "integer",
+          "description": "Duration in seconds for voice notes."
+        },
+        "transcription": {
+          "type": "string",
+          "description": "Voice-to-text transcription of the audio message."
+        },
+        "sharedOutingId": {
+          "type": "string",
+          "description": "Optional referenced outing ID."
+        },
+        "sharedOutingTitle": {
+          "type": "string",
+          "description": "Optional referenced outing title."
+        },
+        "reactions": {
+          "type": "array",
+          "description": "Up to 10 emoji reactions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "senderId",
+        "senderName",
+        "groupId",
+        "text",
+        "messageType",
+        "audioDurationSec",
+        "transcription",
+        "sharedOutingId",
+        "sharedOutingTitle",
+        "reactions",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OutingStory": {
+      "title": "OutingStory",
+      "description": "Instagram-style Instantanea (Story) shared in the Outings camera hub.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "description": "UID of the story creator."
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of the story creator."
+        },
+        "caption": {
+          "type": "string",
+          "description": "Story overlay text or caption."
+        },
+        "filterStyle": {
+          "type": "string",
+          "description": "Visual filter preset applied to the instantanea."
+        },
+        "mediaUri": {
+          "type": "string",
+          "description": "Photo/video URI or visual preset key."
+        },
+        "outingTitle": {
+          "type": "string",
+          "description": "Associated outing title."
+        },
+        "likesCount": {
+          "type": "integer",
+          "description": "Number of story likes."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "authorId",
+        "authorName",
+        "caption",
+        "filterStyle",
+        "mediaUri",
+        "outingTitle",
+        "likesCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "User profiles and tastes/curiosities keyed by Firebase Auth UID."
+    },
+    "/outings/{outingId}": {
+      "schema": {
+        "$ref": "#/entities/Outing"
+      },
+      "description": "Group outings with calendar dates, status colors, map coordinates, RSVP counts, and album photos."
+    },
+    "/chat_messages/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/GroupChatMessage"
+      },
+      "description": "Group chat messages with text, voice notes, and transcriptions."
+    },
+    "/stories/{storyId}": {
+      "schema": {
+        "$ref": "#/entities/OutingStory"
+      },
+      "description": "Instantaneas (Stories) captured in the Outings camera section."
+    }
+  }
+}

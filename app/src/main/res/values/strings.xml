@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Adora</string>
+    <string name="world1_title">Quedadas &amp; Salidas</string>
+    <string name="world2_title">Mundo Bíblico</string>
+    <string name="tab_profile">Inicio</string>
+    <string name="tab_outings">Salidas</string>
+    <string name="tab_map">Mapa</string>
+    <string name="tab_chat">Chat</string>
+    <string name="tab_games">Juegos</string>
+    <string name="sign_in_google">Iniciar sesión con Google</string>
+    <string name="sign_out">Cerrar sesión</string>
+    <string name="new_outing">Nueva Salida</string>
+    <string name="outing_history">Historial de salidas</string>
+    <string name="status_confirmed">Confirmada</string>
+    <string name="status_planned">Pensada</string>
+    <string name="status_cancelled">Cancelada</string>
+    <string name="rsvp_yes">Asistiré</string>
+    <string name="rsvp_maybe">Aún no lo tengo claro</string>
+    <string name="rsvp_no">No asistiré</string>
+</resources>

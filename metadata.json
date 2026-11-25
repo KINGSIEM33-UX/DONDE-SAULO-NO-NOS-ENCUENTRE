@@ -1,0 +1,6 @@
+{
+  "name": "Adora",
+  "description": "App con Dos Mundos: Red social de Salidas y Quedadas en grupo (calendario con estados, mapa en vivo, chat con voz, instantáneas y 8 minijuegos) y Mundo de Estudio Bíblico con IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

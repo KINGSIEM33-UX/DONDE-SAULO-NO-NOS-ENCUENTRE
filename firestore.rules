@@ -1,0 +1,238 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidStringList(listVal, maxLen) {
+      return listVal is list &&
+             listVal.size() <= maxLen &&
+             (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 500));
+    }
+
+    // 1. UserProfile Validation Blueprint
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+               'userId', 'username', 'bio', 'avatarUrl', 'curiosities',
+               'groupId', 'groupInviteCode', 'groupName', 'gamesHighScore',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'username', 'bio', 'avatarUrl', 'curiosities',
+               'groupId', 'groupInviteCode', 'groupName', 'gamesHighScore',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.username is string && data.username.size() >= 1 && data.username.size() <= 60 &&
+             data.bio is string && data.bio.size() <= 300 &&
+             data.avatarUrl is string && data.avatarUrl.size() <= 500 &&
+             isValidStringList(data.curiosities, 20) &&
+             data.groupId is string && data.groupId.size() <= 128 &&
+             data.groupInviteCode is string && data.groupInviteCode.size() <= 32 &&
+             data.groupName is string && data.groupName.size() <= 80 &&
+             data.gamesHighScore is int && data.gamesHighScore >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'username', 'bio', 'avatarUrl', 'curiosities',
+                         'groupId', 'groupInviteCode', 'groupName', 'gamesHighScore', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 2. Outing Validation Blueprint
+    function isValidOuting(data) {
+      return data.keys().hasAll([
+               'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
+               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
+               'rsvpNoCount', 'myRsvp', 'albumPhotos', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
+               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
+               'rsvpNoCount', 'myRsvp', 'albumPhotos', 'createdAt', 'updatedAt'
+             ]) &&
+             data.ownerId is string && data.ownerId == request.auth.uid && data.ownerId.size() <= 128 &&
+             data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.location is string && data.location.size() >= 1 && data.location.size() <= 200 &&
+             data.meetingPoint is string && data.meetingPoint.size() <= 200 &&
+             data.dateIso is string && data.dateIso.size() >= 8 && data.dateIso.size() <= 20 &&
+             data.time is string && data.time.size() >= 1 && data.time.size() <= 20 &&
+             data.status is string && data.status in ['CONFIRMED', 'PLANNED', 'CANCELLED'] &&
+             data.budgetPerPerson is string && data.budgetPerPerson.size() <= 60 &&
+             data.kitItems is string && data.kitItems.size() <= 500 &&
+             data.additionalInfo is string && data.additionalInfo.size() <= 1000 &&
+             data.placePhotoUrl is string && data.placePhotoUrl.size() <= 500 &&
+             (data.destLat is int || data.destLat is float) &&
+             (data.destLng is int || data.destLng is float) &&
+             (data.meetLat is int || data.meetLat is float) &&
+             (data.meetLng is int || data.meetLng is float) &&
+             data.rsvpYesCount is int && data.rsvpYesCount >= 0 &&
+             data.rsvpMaybeCount is int && data.rsvpMaybeCount >= 0 &&
+             data.rsvpNoCount is int && data.rsvpNoCount >= 0 &&
+             data.myRsvp is string && data.myRsvp in ['YES', 'MAYBE', 'NO', 'NONE'] &&
+             isValidStringList(data.albumPhotos, 20) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /outings/{outingId} {
+      allow get: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(outingId) &&
+                       isValidOuting(incoming()) &&
+                       incoming().ownerId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+                       isValidId(outingId) &&
+                       isValidOuting(incoming()) &&
+                       existing().ownerId == request.auth.uid &&
+                       incoming().ownerId == existing().ownerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'groupId', 'title', 'location', 'meetingPoint',
+                         'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+                         'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+                         'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
+                         'rsvpNoCount', 'myRsvp', 'albumPhotos', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
+    }
+
+    // 3. GroupChatMessage Validation Blueprint
+    function isValidChatMessage(data) {
+      return data.keys().hasAll([
+               'senderId', 'senderName', 'groupId', 'text', 'messageType',
+               'audioDurationSec', 'transcription', 'sharedOutingId',
+               'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'senderId', 'senderName', 'groupId', 'text', 'messageType',
+               'audioDurationSec', 'transcription', 'sharedOutingId',
+               'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
+             ]) &&
+             data.senderId is string && data.senderId == request.auth.uid && data.senderId.size() <= 128 &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+             data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
+             data.text is string && data.text.size() <= 1000 &&
+             data.messageType is string && data.messageType in ['TEXT', 'VOICE', 'OUTING_SHARE', 'STORY_REACTION'] &&
+             data.audioDurationSec is int && data.audioDurationSec >= 0 &&
+             data.transcription is string && data.transcription.size() <= 1000 &&
+             data.sharedOutingId is string && data.sharedOutingId.size() <= 128 &&
+             data.sharedOutingTitle is string && data.sharedOutingTitle.size() <= 120 &&
+             isValidStringList(data.reactions, 10) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /chat_messages/{messageId} {
+      allow get: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.senderId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(messageId) &&
+                       isValidChatMessage(incoming()) &&
+                       incoming().senderId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+                       isValidId(messageId) &&
+                       isValidChatMessage(incoming()) &&
+                       existing().senderId == request.auth.uid &&
+                       incoming().senderId == existing().senderId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'text', 'transcription', 'reactions', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
+    }
+
+    // 4. OutingStory Validation Blueprint
+    function isValidStory(data) {
+      return data.keys().hasAll([
+               'authorId', 'authorName', 'caption', 'filterStyle',
+               'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'authorId', 'authorName', 'caption', 'filterStyle',
+               'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
+             ]) &&
+             data.authorId is string && data.authorId == request.auth.uid && data.authorId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             data.caption is string && data.caption.size() <= 300 &&
+             data.filterStyle is string && data.filterStyle.size() <= 40 &&
+             data.mediaUri is string && data.mediaUri.size() <= 500 &&
+             data.outingTitle is string && data.outingTitle.size() <= 120 &&
+             data.likesCount is int && data.likesCount >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /stories/{storyId} {
+      allow get: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(storyId) &&
+                       isValidStory(incoming()) &&
+                       incoming().authorId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+                       isValidId(storyId) &&
+                       isValidStory(incoming()) &&
+                       existing().authorId == request.auth.uid &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'caption', 'likesCount', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
+    }
+  }
+}
