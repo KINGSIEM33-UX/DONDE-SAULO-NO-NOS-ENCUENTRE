@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="media" path="media/" />
+    <files-path name="voice_notes" path="voice_notes/" />
+    <cache-path name="camera_captures" path="camera/" />
+    <cache-path name="shared_cache" path="." />
+</paths>

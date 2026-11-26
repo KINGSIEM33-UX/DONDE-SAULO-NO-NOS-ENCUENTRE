@@ -94,6 +94,7 @@ import androidx.credentials.CredentialManager
 import coil.compose.AsyncImage
 import com.example.data.OutingStatus
 import com.example.ui.theme.StatusConfirmedGreen
+import kotlinx.coroutines.launch
 
 @Composable
 fun World1ProfileScreen(viewModel: MainViewModel) {
@@ -143,7 +144,15 @@ fun ProfileScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            viewModel.updateProfileInfo(profile.username, profile.bio, uri.toString())
+            scope.launch {
+                val persisted = com.example.data.MediaStorageHelper.persistAndOptionallyUploadImage(
+                    context = context,
+                    sourceUri = uri,
+                    folder = "avatars",
+                    uid = viewModel.currentUserId.value
+                )
+                viewModel.updateProfileInfo(profile.username, profile.bio, persisted)
+            }
         }
     }
 

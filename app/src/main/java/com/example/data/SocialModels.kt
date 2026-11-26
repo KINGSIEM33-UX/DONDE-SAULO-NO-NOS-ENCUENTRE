@@ -9,6 +9,9 @@ import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.ServerTimestamp
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class OperationType(val value: String) {
     CREATE("create"),
@@ -18,6 +21,8 @@ enum class OperationType(val value: String) {
     GET("get"),
     WRITE("write"),
 }
+
+fun todayIsoDate(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
 fun handleFirestoreError(exception: Exception, operationType: OperationType, path: String?): String {
     val currentUser = try {
@@ -79,6 +84,35 @@ enum class RsvpChoice(val label: String) {
 }
 
 @IgnoreExtraProperties
+data class SocialGroup(
+    @DocumentId val id: String = "",
+    val name: String = "Grupo de Salidas",
+    val inviteCode: String = "",
+    val createdBy: String = "",
+    val memberIds: List<String> = emptyList(),
+    val memberNames: Map<String, String> = emptyMap(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun toCreateMap(creatorUid: String, creatorName: String): Map<String, Any> {
+        val code = inviteCode.trim().uppercase().take(32).ifBlank { id.take(32) }
+        val cleanMembers = (memberIds + creatorUid).distinct().take(50)
+        val names = memberNames.toMutableMap().apply {
+            put(creatorUid, creatorName.take(60).ifBlank { "Usuario" })
+        }
+        return mapOf(
+            "name" to name.take(80).ifBlank { "Mi Grupo" },
+            "inviteCode" to code,
+            "createdBy" to creatorUid,
+            "memberIds" to cleanMembers,
+            "memberNames" to names,
+            "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+}
+
+@IgnoreExtraProperties
 data class UserProfile(
     @DocumentId val id: String = "",
     val userId: String = "",
@@ -86,7 +120,7 @@ data class UserProfile(
     val bio: String = "Listo para la próxima salida con el grupo ✨",
     val avatarUrl: String = "avatar_sunset",
     val curiosities: List<String> = listOf("🍕 Pizza lover", "🎮 Gamer de noche", "🏔️ Senderismo", "🎶 Música en vivo"),
-    val groupId: String = "GRUPO-QUEDADAS",
+    val groupId: String = "QUEDA-2026",
     val groupInviteCode: String = "QUEDA-2026",
     val groupName: String = "Peña Los Inseparables",
     val gamesHighScore: Long = 120L,
@@ -100,13 +134,13 @@ data class UserProfile(
             "bio" to bio.take(300),
             "avatarUrl" to avatarUrl.take(500),
             "curiosities" to curiosities.take(20).map { it.take(500) },
-            "groupId" to groupId.take(128).ifBlank { "GRUPO-QUEDADAS" },
+            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
             "groupInviteCode" to groupInviteCode.take(32).ifBlank { "QUEDA-2026" },
             "groupName" to groupName.take(80).ifBlank { "Mi Grupo" },
-            "gamesHighScore" to gamesHighScore,
+            "gamesHighScore" to gamesHighScore.coerceAtLeast(0L),
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 
     fun toUpdateMap(): Map<String, Any> {
@@ -115,12 +149,12 @@ data class UserProfile(
             "bio" to bio.take(300),
             "avatarUrl" to avatarUrl.take(500),
             "curiosities" to curiosities.take(20).map { it.take(500) },
-            "groupId" to groupId.take(128).ifBlank { "GRUPO-QUEDADAS" },
+            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
             "groupInviteCode" to groupInviteCode.take(32).ifBlank { "QUEDA-2026" },
             "groupName" to groupName.take(80).ifBlank { "Mi Grupo" },
-            "gamesHighScore" to gamesHighScore,
+            "gamesHighScore" to gamesHighScore.coerceAtLeast(0L),
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 }
 
@@ -147,6 +181,7 @@ data class Outing(
     val rsvpMaybeCount: Long = 0L,
     val rsvpNoCount: Long = 0L,
     val myRsvp: String = RsvpChoice.YES.name,
+    val rsvpByUser: Map<String, String> = emptyMap(),
     val albumPhotos: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -157,14 +192,26 @@ data class Outing(
     val rsvpChoice: RsvpChoice
         get() = RsvpChoice.fromString(myRsvp)
 
+    fun rsvpChoiceFor(uid: String?): RsvpChoice {
+        if (!uid.isNullOrBlank() && rsvpByUser.containsKey(uid)) {
+            return RsvpChoice.fromString(rsvpByUser[uid])
+        }
+        return rsvpChoice
+    }
+
     fun toCreateMap(uid: String): Map<String, Any> {
+        val normalizedMap = if (rsvpByUser.isEmpty() && RsvpChoice.fromString(myRsvp) != RsvpChoice.NONE) {
+            mapOf(uid to RsvpChoice.fromString(myRsvp).name)
+        } else {
+            rsvpByUser
+        }
         return mapOf(
             "ownerId" to uid,
             "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
             "meetingPoint" to meetingPoint.take(200),
-            "dateIso" to dateIso.take(20).ifBlank { "2026-11-10" },
+            "dateIso" to dateIso.take(20).ifBlank { todayIsoDate() },
             "time" to time.take(20).ifBlank { "19:00" },
             "status" to OutingStatus.fromString(status).name,
             "budgetPerPerson" to budgetPerPerson.take(60),
@@ -179,10 +226,11 @@ data class Outing(
             "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
             "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
             "myRsvp" to RsvpChoice.fromString(myRsvp).name,
+            "rsvpByUser" to normalizedMap,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 
     fun toUpdateMap(): Map<String, Any> {
@@ -191,7 +239,7 @@ data class Outing(
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
             "meetingPoint" to meetingPoint.take(200),
-            "dateIso" to dateIso.take(20).ifBlank { "2026-11-10" },
+            "dateIso" to dateIso.take(20).ifBlank { todayIsoDate() },
             "time" to time.take(20).ifBlank { "19:00" },
             "status" to OutingStatus.fromString(status).name,
             "budgetPerPerson" to budgetPerPerson.take(60),
@@ -206,9 +254,10 @@ data class Outing(
             "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
             "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
             "myRsvp" to RsvpChoice.fromString(myRsvp).name,
+            "rsvpByUser" to rsvpByUser,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 }
 
@@ -221,6 +270,7 @@ data class GroupChatMessage(
     val text: String = "",
     val messageType: String = "TEXT", // TEXT, VOICE, OUTING_SHARE, STORY_REACTION
     val audioDurationSec: Long = 0L,
+    val audioUrl: String = "",
     val transcription: String = "",
     val sharedOutingId: String = "",
     val sharedOutingTitle: String = "",
@@ -241,13 +291,14 @@ data class GroupChatMessage(
             "text" to text.take(1000),
             "messageType" to validType,
             "audioDurationSec" to audioDurationSec.coerceAtLeast(0L),
+            "audioUrl" to audioUrl.take(500),
             "transcription" to transcription.take(1000),
             "sharedOutingId" to sharedOutingId.take(128),
             "sharedOutingTitle" to sharedOutingTitle.take(120),
             "reactions" to reactions.take(10).map { it.take(500) },
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 }
 
@@ -256,6 +307,7 @@ data class OutingStory(
     @DocumentId val id: String = "",
     val authorId: String = "",
     val authorName: String = "",
+    val groupId: String = "QUEDA-2026",
     val caption: String = "",
     val filterStyle: String = "NEON_VIBES",
     val mediaUri: String = "story_sunset",
@@ -268,6 +320,7 @@ data class OutingStory(
         return mapOf(
             "authorId" to uid,
             "authorName" to authorName.take(80).ifBlank { "Miembro" },
+            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
             "caption" to caption.take(300),
             "filterStyle" to filterStyle.take(40).ifBlank { "NEON_VIBES" },
             "mediaUri" to mediaUri.take(500).ifBlank { "story_sunset" },
@@ -275,6 +328,6 @@ data class OutingStory(
             "likesCount" to likesCount.coerceAtLeast(0L),
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
-        ).filterValues { it != null } as Map<String, Any>
+        )
     }
 }

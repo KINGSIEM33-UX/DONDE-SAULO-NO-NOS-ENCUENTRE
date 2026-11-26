@@ -1,21 +1,20 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Keep Firestore data models (serialized/deserialized via reflection)
+-keep class com.example.data.UserProfile { *; }
+-keep class com.example.data.SocialGroup { *; }
+-keep class com.example.data.Outing { *; }
+-keep class com.example.data.GroupChatMessage { *; }
+-keep class com.example.data.OutingStory { *; }
+-keep class com.example.data.OutingStatus { *; }
+-keep class com.example.data.RsvpChoice { *; }
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep Moshi DTOs and generated adapters
+-keep class com.example.data.*Dto { *; }
+-keep class com.example.data.*Response { *; }
+-keep class com.example.data.*JsonAdapter { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Keep Retrofit service interfaces
+-keep interface com.example.data.BibleApiService { *; }
+-keep interface com.example.data.BollsBibleApiService { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep stack trace line numbers for crash diagnostics
+-keepattributes SourceFile,LineNumberTable

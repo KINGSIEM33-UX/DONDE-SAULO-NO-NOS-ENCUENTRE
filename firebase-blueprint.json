@@ -1,5 +1,20 @@
 {
   "entities": {
+    "SocialGroup": {
+      "title": "SocialGroup",
+      "description": "Multi-user outing group enabling shared outings, group chat, and stories among invited members.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Display name of the group (1-80 chars)." },
+        "inviteCode": { "type": "string", "description": "Normalized shareable invite code (1-32 chars)." },
+        "createdBy": { "type": "string", "description": "Firebase UID of group creator." },
+        "memberIds": { "type": "array", "description": "List of Firebase UIDs belonging to this group (max 50)." },
+        "memberNames": { "type": "object", "description": "Map of UID to display username." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "inviteCode", "createdBy", "memberIds", "memberNames", "createdAt", "updatedAt"]
+    },
     "UserProfile": {
       "title": "UserProfile",
       "description": "User profile for World 1 social outings, including tastes/curiosities and active group metadata.",
@@ -324,6 +339,12 @@
     }
   },
   "firestore": {
+    "/groups/{groupId}": {
+      "schema": {
+        "$ref": "#/entities/SocialGroup"
+      },
+      "description": "Shared multi-user outing groups keyed by normalized invite code."
+    },
     "/users/{userId}": {
       "schema": {
         "$ref": "#/entities/UserProfile"

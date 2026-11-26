@@ -86,13 +86,14 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
 
-        // Initialize reactive Room database and background data worker
-        val database = AppDatabase.getDatabase(applicationContext, lifecycleScope)
+        // Initialize reactive Room database using application-scoped seeding
+        val database = AppDatabase.getDatabase(applicationContext)
         val repository = Repository(
             database.bibleSectionDao(),
             database.verseNoteDao(),
             database.favoriteVerseDao(),
             database.recentChapterDao(),
+            database.studyEventDao(),
             applicationContext
         )
 

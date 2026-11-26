@@ -4,32 +4,66 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-@Database(entities = [BibleSection::class, VerseNote::class, FavoriteVerse::class, RecentChapter::class], version = 6, exportSchema = false)
+@Database(
+    entities = [
+        BibleSection::class,
+        VerseNote::class,
+        FavoriteVerse::class,
+        RecentChapter::class,
+        StudyEvent::class
+    ],
+    version = 7,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bibleSectionDao(): BibleSectionDao
     abstract fun verseNoteDao(): VerseNoteDao
     abstract fun favoriteVerseDao(): FavoriteVerseDao
     abstract fun recentChapterDao(): RecentChapterDao
+    abstract fun studyEventDao(): StudyEventDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
+        private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `study_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `details` TEXT NOT NULL,
+                        `dateIso` TEXT NOT NULL,
+                        `time` TEXT NOT NULL,
+                        `completed` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        fun getDatabase(context: Context, scope: CoroutineScope = appScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "donde_saulo_database"
                 )
-                .fallbackToDestructiveMigration()
-                .addCallback(DatabaseCallback(scope))
-                .build()
+                    .addMigrations(MIGRATION_6_7)
+                    .fallbackToDestructiveMigration(dropAllTables = false)
+                    .addCallback(DatabaseCallback(appScope))
+                    .build()
                 INSTANCE = instance
                 instance
             }

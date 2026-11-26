@@ -1,120 +1,174 @@
 package com.example.ui
 
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
-import com.example.data.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.graphics.Color
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.BibleClient
+import com.example.data.BibleDto
+import com.example.data.BookDto
+import com.example.data.ChapterDto
+import com.example.data.ParsedVerse
+import com.example.data.ResolvedChapter
+import com.example.data.SearchVerseDto
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BibleIndexScreen(
+    preferredVersion: String = "RVR1960",
     onBack: () -> Unit,
-    onChapterSelected: (String, String, String) -> Unit // bibleId, bookId, chapterId
+    onChapterSelected: (String, String, String) -> Unit
 ) {
     var bibles by remember { mutableStateOf<List<BibleDto>>(emptyList()) }
     var selectedBible by remember { mutableStateOf<BibleDto?>(null) }
     var books by remember { mutableStateOf<List<BookDto>>(emptyList()) }
     var selectedBook by remember { mutableStateOf<BookDto?>(null) }
     var chapters by remember { mutableStateOf<List<ChapterDto>>(emptyList()) }
-    
-    var isLoading by remember { mutableStateOf(true) }
+
+    var isLoadingBooks by remember { mutableStateOf(true) }
+    var isLoadingChapters by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var chaptersError by remember { mutableStateOf<String?>(null) }
     var expandedBibleSelector by remember { mutableStateOf(false) }
+    var retryCounter by remember { mutableIntStateOf(0) }
 
-    // Predefined requested Bibles with known generic IDs
-    val requestedBibles = listOf(
-        BibleDto(id = "592420522e16049f-01", name = "Reina Valera 1960", abbreviation = "RVR1960", description = null, language = LanguageDto("spa", "Spanish")),
-        BibleDto(id = "06125adad2d5898a-01", name = "Nueva Versión Internacional", abbreviation = "NVI", description = null, language = LanguageDto("spa", "Spanish")),
-        BibleDto(id = "179568874c45066f-01", name = "Traducción en Lenguaje Actual", abbreviation = "TLA", description = null, language = LanguageDto("spa", "Spanish"))
-    )
-
-    LaunchedEffect(Unit) {
+    LaunchedEffect(retryCounter) {
+        isLoadingBooks = true
+        errorMsg = null
         try {
-            val response = BibleClient.service.getBibles()
-            val spanishBibles = response.data.filter { it.language?.id == "spa" }
-            
-            val mergedBibles = requestedBibles.toMutableList()
-            for (sb in spanishBibles) {
-                if (mergedBibles.none { it.abbreviation == sb.abbreviation }) {
-                    mergedBibles.add(sb)
-                }
-            }
-            bibles = mergedBibles
-            selectedBible = bibles.firstOrNull { it.abbreviation == "RVR1960" } ?: bibles.firstOrNull()
-            isLoading = false
+            val fetched = BibleClient.fetchBibles()
+            bibles = fetched
+            selectedBible = fetched.firstOrNull {
+                it.abbreviation.equals(preferredVersion, ignoreCase = true) ||
+                    it.id.equals(preferredVersion, ignoreCase = true)
+            } ?: fetched.firstOrNull()
         } catch (e: Exception) {
-            bibles = requestedBibles
-            selectedBible = requestedBibles.first()
-            isLoading = false
+            errorMsg = "No se pudieron cargar las traducciones: ${e.localizedMessage}"
+            isLoadingBooks = false
         }
     }
 
-    LaunchedEffect(selectedBible) {
+    LaunchedEffect(selectedBible, retryCounter) {
         selectedBible?.let { bible ->
-            isLoading = true
+            isLoadingBooks = true
             errorMsg = null
+            chapters = emptyList()
+            selectedBook = null
             try {
-                val response = BibleClient.service.getBooks(bible.id)
-                books = response.data
-                isLoading = false
+                books = BibleClient.fetchBooks(bible.id)
+                isLoadingBooks = false
             } catch (e: Exception) {
-                errorMsg = "Error cargando libros: Verifica tu conexión y API Key."
-                isLoading = false
+                errorMsg = "Error cargando libros: ${e.localizedMessage ?: "sin conexión"}"
+                isLoadingBooks = false
             }
         }
     }
-        
-    LaunchedEffect(selectedBook) {
-        selectedBook?.let { book ->
-            try {
-                val response = BibleClient.service.getChapters(selectedBible!!.id, book.id)
-                chapters = response.data
-            } catch (e: Exception) {
-                // Ignore silent errors for chapters
-            }
+
+    LaunchedEffect(selectedBook, selectedBible) {
+        val bible = selectedBible ?: return@LaunchedEffect
+        val book = selectedBook ?: return@LaunchedEffect
+        isLoadingChapters = true
+        chaptersError = null
+        chapters = emptyList()
+        try {
+            chapters = BibleClient.fetchChapters(bible.id, book.id)
+        } catch (e: Exception) {
+            chaptersError = "No se pudieron cargar los capítulos de ${book.name}"
+        } finally {
+            isLoadingChapters = false
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { 
+                title = {
                     Column {
-                        Text("Índice de la Biblia", fontFamily = FontFamily.Serif)
-                        if (selectedBible != null) {
+                        Text("Índice de la Biblia", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
+                        selectedBible?.let { activeBible ->
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable { expandedBibleSelector = true }
                             ) {
                                 Text(
-                                    text = selectedBible?.name ?: "",
+                                    text = "${activeBible.abbreviation ?: activeBible.id} — ${activeBible.name}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -126,10 +180,9 @@ fun BibleIndexScreen(
                             ) {
                                 bibles.forEach { bible ->
                                     DropdownMenuItem(
-                                        text = { Text("${bible.abbreviation} - ${bible.name}") },
-                                        onClick = { 
+                                        text = { Text("${bible.abbreviation ?: bible.id} — ${bible.name}") },
+                                        onClick = {
                                             selectedBible = bible
-                                            selectedBook = null
                                             expandedBibleSelector = false
                                         }
                                     )
@@ -139,46 +192,98 @@ fun BibleIndexScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Volver") }
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                    }
                 }
             )
         }
     ) { padding ->
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        } else if (errorMsg != null) {
-            Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { 
-                Text(errorMsg!!, color = MaterialTheme.colorScheme.error) 
+        when {
+            isLoadingBooks -> {
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
             }
-        } else {
-            Row(modifier = Modifier.fillMaxSize().padding(padding)) {
-                // Books list
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(books) { book ->
-                        ListItem(
-                            headlineContent = { Text(book.name, fontWeight = if (book == selectedBook) FontWeight.Bold else FontWeight.Normal) },
-                            modifier = Modifier.clickable { selectedBook = book }
-                        )
+            errorMsg != null -> {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(errorMsg!!, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { retryCounter++ }) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Reintentar")
                     }
                 }
-                
-                Divider(modifier = Modifier.width(1.dp).fillMaxHeight())
-                
-                // Chapters list
-                if (selectedBook != null) {
+            }
+            else -> {
+                Row(modifier = Modifier.fillMaxSize().padding(padding)) {
                     LazyColumn(modifier = Modifier.weight(1f)) {
-                        items(chapters) { chapter ->
+                        items(books, key = { it.id }) { book ->
+                            val isSel = book.id == selectedBook?.id
                             ListItem(
-                                headlineContent = { Text(chapter.reference ?: chapter.number) },
-                                modifier = Modifier.clickable {
-                                    onChapterSelected(selectedBible!!.id, selectedBook!!.id, chapter.id)
-                                }
+                                headlineContent = {
+                                    Text(
+                                        text = book.name,
+                                        fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.Normal,
+                                        color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        if (isSel) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                        else Color.Transparent
+                                    )
+                                    .clickable { selectedBook = book }
                             )
                         }
                     }
-                } else {
-                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                        Text("Selecciona un libro", style = MaterialTheme.typography.bodyMedium)
+
+                    VerticalDivider(modifier = Modifier.fillMaxHeight())
+
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        when {
+                            selectedBook == null -> {
+                                Text(
+                                    text = "Selecciona un libro",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.align(Alignment.Center)
+                                )
+                            }
+                            isLoadingChapters -> {
+                                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                            }
+                            chaptersError != null -> {
+                                Text(
+                                    text = chaptersError!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
+                                )
+                            }
+                            else -> {
+                                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                    items(chapters, key = { it.id }) { chapter ->
+                                        ListItem(
+                                            headlineContent = {
+                                                Text(
+                                                    text = chapter.reference ?: "Capítulo ${chapter.number}",
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            },
+                                            modifier = Modifier.clickable {
+                                                val bId = selectedBible?.id ?: preferredVersion
+                                                val bkId = selectedBook?.id ?: "JHN"
+                                                onChapterSelected(bId, bkId, chapter.id)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -194,8 +299,26 @@ fun BibleReaderScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
-    var content by remember { mutableStateOf<String?>(null) }
-    var title by remember { mutableStateOf("Cargando...") }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val preferredVersion by viewModel.bibleVersion.collectAsStateWithLifecycle()
+    val textSizeSp by viewModel.textSizeSp.collectAsStateWithLifecycle()
+    val textPaddingDp by viewModel.textPaddingDp.collectAsStateWithLifecycle()
+    val favoriteVerses by viewModel.favoriteVerses.collectAsStateWithLifecycle()
+
+    val availableVersions = remember { BibleClient.availableSpanishBibles() }
+
+    var currentBibleId by remember(bibleId, preferredVersion) {
+        mutableStateOf(bibleId ?: BibleClient.toBollsTranslation(preferredVersion))
+    }
+    var targetChapterId by remember(chapterId) {
+        mutableStateOf(chapterId ?: "JHN.3")
+    }
+    var retryCounter by remember { mutableIntStateOf(0) }
+
+    var resolvedChapter by remember { mutableStateOf<ResolvedChapter?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var expandedBibleSelector by remember { mutableStateOf(false) }
 
@@ -205,69 +328,48 @@ fun BibleReaderScreen(
     var bibleSearchResults by remember { mutableStateOf<List<SearchVerseDto>?>(null) }
     var isSearchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
-    val coroutineScope = rememberCoroutineScope()
-
-    val availableVersions = remember { listOf(
-        Pair("592420522e16049f-01", "RVR1960"),
-        Pair("06125adad2d5898a-01", "NVI"),
-        Pair("179568874c45066f-01", "TLA")
-    ) }
-    
-    var currentBibleId by remember(bibleId) { mutableStateOf(bibleId ?: "592420522e16049f-01") }
-    val currentBibleName = availableVersions.find { it.first == currentBibleId }?.second ?: "Versión"
-    
-    // Allow targetChapterId to change internally via search navigation
-    var targetChapterId by remember(chapterId) { mutableStateOf(chapterId ?: "JHN.3") }
 
     val chapterNotes by viewModel.getNotesForChapter(targetChapterId).collectAsStateWithLifecycle(initialValue = emptyList())
     val rawChapterExplanation by viewModel.rawChapterExplanation.collectAsStateWithLifecycle()
     val isGeneratingRawExplanation by viewModel.isGeneratingRawExplanation.collectAsStateWithLifecycle()
+
     var showNoteDialog by remember { mutableStateOf(false) }
     var noteVerseInput by remember { mutableStateOf("") }
     var noteTextInput by remember { mutableStateOf("") }
+    var selectedVerseForActions by remember { mutableStateOf<ParsedVerse?>(null) }
 
-    LaunchedEffect(currentBibleId, targetChapterId) {
+    val currentBibleLabel = availableVersions.firstOrNull {
+        it.id.equals(currentBibleId, ignoreCase = true) ||
+            it.abbreviation.equals(currentBibleId, ignoreCase = true)
+    }?.abbreviation ?: currentBibleId
+
+    LaunchedEffect(currentBibleId, targetChapterId, retryCounter) {
         isLoading = true
-        isSearchActive = false
-        searchQuery = ""
+        loadError = null
         bibleSearchResults = null
         viewModel.clearRawChapterExplanation()
         try {
-            val response = BibleClient.service.getChapterContent(currentBibleId, targetChapterId)
-            content = response.data.content
-            title = response.data.reference ?: "Capítulo"
-            viewModel.saveRecentChapter(currentBibleId, targetChapterId, title)
+            val chapter = BibleClient.fetchChapter(currentBibleId, targetChapterId)
+            resolvedChapter = chapter
+            viewModel.saveRecentChapter(chapter.bibleId, chapter.chapterId, chapter.reference)
         } catch (e: Exception) {
-            // Fallback for missing versions in free tier API.Bible
-            if (e.message?.contains("404") == true || e.message?.contains("403") == true) {
-                 try {
-                     val fallbackResponse = BibleClient.service.getChapterContent("592420522e16049f-01", targetChapterId)
-                     content = fallbackResponse.data.content
-                     title = fallbackResponse.data.reference ?: "Capítulo"
-                     viewModel.saveRecentChapter("592420522e16049f-01", targetChapterId, title)
-                 } catch (fallbackEx: Exception) {
-                     content = "Error de red: ${fallbackEx.message}\nVerifica tu conexión y clave de API."
-                     title = "Error"
-                 }
-            } else {
-                content = "Error de red: ${e.message}\nVerifica tu conexión y clave de API."
-                title = "Error"
-            }
+            loadError = "No se pudo cargar el capítulo (${e.localizedMessage ?: "verifica tu conexión a internet"})."
+            resolvedChapter = null
         } finally {
             isLoading = false
         }
     }
 
-    fun performBibleSearch(query: String) {
-        if (query.isBlank()) return
-        isSearchLoading = true
-        searchError = null
+    fun executeGlobalSearch() {
+        val q = searchQuery.trim()
+        if (q.isBlank()) return
         coroutineScope.launch {
+            isSearchLoading = true
+            searchError = null
             try {
-                val response = BibleClient.service.searchBible(currentBibleId, query)
-                bibleSearchResults = response.data.verses
+                bibleSearchResults = BibleClient.searchVerses(currentBibleId, q)
             } catch (e: Exception) {
-                searchError = "Error en la búsqueda. Revisa tu conexión."
+                searchError = "Error al buscar en la Biblia: ${e.localizedMessage}"
             } finally {
                 isSearchLoading = false
             }
@@ -275,78 +377,43 @@ fun BibleReaderScreen(
     }
 
     Scaffold(
-        floatingActionButton = {
-            if (!isSearchActive || searchScope == "chapter") {
-                FloatingActionButton(
-                    onClick = { showNoteDialog = true },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = "Añadir Nota")
-                }
-            }
-        },
         topBar = {
-            if (isSearchActive) {
-                TopAppBar(
-                    title = {
-                        TextField(
+            TopAppBar(
+                title = {
+                    if (isSearchActive) {
+                        OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder = { Text("Buscar...", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)) },
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
+                            placeholder = {
+                                Text(if (searchScope == "chapter") "Buscar en capítulo..." else "Buscar en toda la Biblia...")
+                            },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
-                                onSearch = {
-                                    if (searchScope == "bible") {
-                                        performBibleSearch(searchQuery)
+                                onSearch = { if (searchScope == "bible") executeGlobalSearch() }
+                            ),
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = ""; bibleSearchResults = null }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Limpiar")
                                     }
                                 }
-                            ),
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { 
-                            isSearchActive = false
-                            searchQuery = ""
-                            bibleSearchResults = null
-                        }) {
-                            Icon(Icons.Default.ArrowBack, "Cerrar búsqueda")
-                        }
-                    },
-                    actions = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Clear, "Limpiar")
-                            }
-                        }
-                        IconButton(onClick = { 
-                            if (searchScope == "bible") {
-                                performBibleSearch(searchQuery)
-                            }
-                        }) {
-                            Icon(Icons.Default.Search, "Buscar")
-                        }
-                    }
-                )
-            } else {
-                TopAppBar(
-                    title = { 
+                    } else {
                         Column {
-                            Text(title, fontFamily = FontFamily.Serif)
+                            Text(
+                                text = resolvedChapter?.reference ?: "Lector Bíblico",
+                                fontFamily = FontFamily.Serif,
+                                fontWeight = FontWeight.Bold
+                            )
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable { expandedBibleSelector = true }
                             ) {
                                 Text(
-                                    text = currentBibleName,
+                                    text = currentBibleLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -356,213 +423,321 @@ fun BibleReaderScreen(
                                 expanded = expandedBibleSelector,
                                 onDismissRequest = { expandedBibleSelector = false }
                             ) {
-                                availableVersions.forEach { (id, name) ->
+                                availableVersions.forEach { bible ->
                                     DropdownMenuItem(
-                                        text = { Text(name) },
-                                        onClick = { 
-                                            currentBibleId = id
+                                        text = { Text("${bible.abbreviation} — ${bible.name}") },
+                                        onClick = {
+                                            currentBibleId = bible.id
+                                            viewModel.setBibleVersion(bible.abbreviation ?: bible.id)
                                             expandedBibleSelector = false
                                         }
                                     )
                                 }
                             }
                         }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Volver") }
-                    },
-                    actions = {
+                    }
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            if (isSearchActive) {
+                                isSearchActive = false
+                                searchQuery = ""
+                                bibleSearchResults = null
+                            } else {
+                                onBack()
+                            }
+                        }
+                    ) {
+                        Icon(
+                            if (isSearchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Volver"
+                        )
+                    }
+                },
+                actions = {
+                    if (!isSearchActive) {
                         IconButton(onClick = { isSearchActive = true }) {
-                            Icon(Icons.Default.Search, "Buscar")
+                            Icon(Icons.Default.Search, contentDescription = "Buscar")
+                        }
+                        IconButton(
+                            onClick = {
+                                noteVerseInput = resolvedChapter?.reference ?: targetChapterId
+                                noteTextInput = ""
+                                showNoteDialog = true
+                            }
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Añadir nota")
                         }
                     }
-                )
-            }
+                }
+            )
         }
     ) { padding ->
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        } else if (content == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
-                Text("No se pudo cargar el capítulo.", color = MaterialTheme.colorScheme.error) 
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                if (isSearchActive) {
-                    TabRow(
-                        selectedTabIndex = if (searchScope == "chapter") 0 else 1,
-                        modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            if (isSearchActive) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { searchScope = "chapter"; bibleSearchResults = null },
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Tab(
-                            selected = searchScope == "chapter",
-                            onClick = { searchScope = "chapter" },
-                            text = { Text("En este capítulo") }
+                        Text(
+                            "En este capítulo",
+                            fontWeight = if (searchScope == "chapter") FontWeight.Black else FontWeight.Normal
                         )
-                        Tab(
-                            selected = searchScope == "bible",
-                            onClick = { 
-                                searchScope = "bible"
-                                if (searchQuery.isNotBlank() && bibleSearchResults == null) {
-                                    performBibleSearch(searchQuery)
-                                }
-                            },
-                            text = { Text("Toda la Biblia") }
+                    }
+                    FilledTonalButton(
+                        onClick = { searchScope = "bible"; if (searchQuery.isNotBlank()) executeGlobalSearch() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            "Toda la Biblia",
+                            fontWeight = if (searchScope == "bible") FontWeight.Black else FontWeight.Normal
                         )
                     }
                 }
+            }
 
-                if (isSearchActive && searchScope == "bible") {
-                    // Global Search Results
-                    if (isSearchLoading) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                    } else if (searchError != null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(searchError!!, color = MaterialTheme.colorScheme.error) }
-                    } else if (bibleSearchResults?.isEmpty() == true) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No se encontraron resultados para '$searchQuery'") }
-                    } else if (bibleSearchResults != null) {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(bibleSearchResults!!) { result ->
-                                val cleanSnippet = result.text.replace(Regex("<.*?>"), "")
-                                ListItem(
-                                    headlineContent = { Text(result.reference ?: "Versículo", fontWeight = FontWeight.Bold) },
-                                    supportingContent = { Text(cleanSnippet, maxLines = 3) },
-                                    modifier = Modifier.clickable {
-                                        targetChapterId = result.chapterId
-                                        isSearchActive = false
-                                    }
-                                )
-                                Divider()
-                            }
-                        }
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Escribe para buscar en toda la Biblia") }
-                    }
-                } else {
-                    // Chapter text content
-                    val scrollState = rememberScrollState()
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                            .padding(16.dp)
-                    ) {
-                        val cleanText = content?.replace(Regex("<.*?>"), " ")?.replace(Regex("\\s+"), " ") ?: ""
-                        
-                        val displayText = if (isSearchActive && searchQuery.isNotBlank()) {
-                            val highlightColor = Color.Yellow.copy(alpha = 0.4f)
-                            buildAnnotatedString {
-                                val matchResults = Regex(Regex.escape(searchQuery), RegexOption.IGNORE_CASE).findAll(cleanText).toList()
-                                var currentIndex = 0
-                                for (match in matchResults) {
-                                    append(cleanText.substring(currentIndex, match.range.first))
-                                    withStyle(style = SpanStyle(background = highlightColor)) {
-                                        append(cleanText.substring(match.range))
-                                    }
-                                    currentIndex = match.range.last + 1
-                                }
-                                append(cleanText.substring(currentIndex))
+            if (isSearchActive && searchScope == "bible") {
+                when {
+                    isSearchLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    searchError != null -> Text(searchError!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                    bibleSearchResults != null -> {
+                        val results = bibleSearchResults.orEmpty()
+                        if (results.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Sin coincidencias para '$searchQuery'.")
                             }
                         } else {
-                            AnnotatedString(cleanText)
-                        }
-
-                        Text(
-                            text = displayText,
-                            fontFamily = FontFamily.Serif,
-                            style = MaterialTheme.typography.bodyLarge,
-                            lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.5
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Button(
-                            onClick = { viewModel.explainRawChapter(title, cleanText) },
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            enabled = !isGeneratingRawExplanation
-                        ) {
-                            if (isGeneratingRawExplanation) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analizando capítulo con Gemini...")
-                            } else {
-                                Text("Explicar Capítulo con IA (Gemini)")
-                            }
-                        }
-
-                        if (rawChapterExplanation != null) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                                )
+                            LazyColumn(
+                                contentPadding = PaddingValues(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(
-                                        text = "Resumen Histórico y Espiritual (Gemini)",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = rawChapterExplanation ?: "",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-                        
-                        if (chapterNotes.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(32.dp))
-                            Divider()
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = "Mis Notas (${chapterNotes.size})",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            chapterNotes.forEach { note ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                ) {
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
+                                items(results, key = { it.id }) { hit ->
+                                    Card(
+                                        onClick = {
+                                            targetChapterId = hit.chapterId
+                                            isSearchActive = false
+                                        },
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(14.dp)) {
                                             Text(
-                                                text = "Versículo: ${note.verseReference}",
-                                                style = MaterialTheme.typography.labelMedium,
+                                                text = hit.reference ?: hit.chapterId,
                                                 fontWeight = FontWeight.Bold,
                                                 color = MaterialTheme.colorScheme.primary
                                             )
-                                            IconButton(onClick = { viewModel.deleteVerseNote(note.id) }, modifier = Modifier.size(24.dp)) {
-                                                Icon(Icons.Default.Clear, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(hit.text, fontSize = 14.sp)
                                         }
-                                        Spacer(modifier = Modifier.height(8.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return@Column
+            }
+
+            when {
+                isLoading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                loadError != null -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(loadError!!, color = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { retryCounter++ }) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Reintentar")
+                        }
+                    }
+                }
+                resolvedChapter != null -> {
+                    val chapter = resolvedChapter!!
+                    val fullPlainText = remember(chapter) {
+                        chapter.verses.joinToString("\n") { "${it.number}. ${it.text}" }
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = textPaddingDp.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // AI Chapter Study Banner
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Explicación con IA", fontWeight = FontWeight.Bold)
+                                        }
+                                        Button(
+                                            onClick = { viewModel.explainRawChapter(chapter.reference, fullPlainText) },
+                                            enabled = !isGeneratingRawExplanation
+                                        ) {
+                                            Text(if (isGeneratingRawExplanation) "Analizando..." else "Explicar", fontSize = 12.sp)
+                                        }
+                                    }
+                                    if (isGeneratingRawExplanation) {
+                                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                                    } else if (!rawChapterExplanation.isNullOrBlank()) {
                                         Text(
-                                            text = note.noteText,
+                                            text = rawChapterExplanation!!,
                                             style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            lineHeight = (textSizeSp * 1.35f).sp
                                         )
                                     }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(48.dp)) // padding for FAB
+                        }
+
+                        // Verses List (tappable for Favorite / Note / Share)
+                        items(chapter.verses, key = { it.number }) { verse ->
+                            val verseRef = "${chapter.reference}:${verse.number}"
+                            val isFav = favoriteVerses.any { it.verseReference == verseRef }
+                            val matchesChapterFilter = !isSearchActive ||
+                                searchQuery.isBlank() ||
+                                verse.text.contains(searchQuery, ignoreCase = true)
+
+                            if (matchesChapterFilter) {
+                                Surface(
+                                    onClick = { selectedVerseForActions = verse },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isFav) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else Color.Transparent,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 6.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Text(
+                                            text = "${verse.number}",
+                                            fontSize = (textSizeSp * 0.72f).sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.width(28.dp).padding(top = 2.dp)
+                                        )
+                                        Text(
+                                            text = highlightQuery(verse.text, if (isSearchActive) searchQuery else ""),
+                                            fontSize = textSizeSp.sp,
+                                            lineHeight = (textSizeSp * 1.5f).sp,
+                                            fontFamily = FontFamily.Serif,
+                                            color = MaterialTheme.colorScheme.onBackground,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (isFav) {
+                                            Icon(
+                                                imageVector = Icons.Default.Favorite,
+                                                contentDescription = "Favorito",
+                                                tint = Color.Red,
+                                                modifier = Modifier.size(16.dp).padding(top = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Chapter Notes Section
+                        if (chapterNotes.isNotEmpty()) {
+                            item {
+                                Spacer(Modifier.height(12.dp))
+                                HorizontalDivider()
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    text = "Mis Notas del Capítulo (${chapterNotes.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            items(chapterNotes, key = { it.id }) { note ->
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(note.verseReference, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                            Text(note.noteText, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        IconButton(onClick = { viewModel.deleteVerseNote(note.id) }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Eliminar nota", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Bottom Chapter Prev / Next Navigation Bar
+                    Surface(tonalElevation = 4.dp, modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (chapter.chapterNumber > 1) {
+                                        targetChapterId = "${chapter.bookId}.${chapter.chapterNumber - 1}"
+                                    }
+                                },
+                                enabled = chapter.chapterNumber > 1
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
+                                Text("Anterior", fontSize = 12.sp)
+                            }
+                            Text(
+                                text = "Cap. ${chapter.chapterNumber} / ${chapter.totalChapters}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    if (chapter.chapterNumber < chapter.totalChapters) {
+                                        targetChapterId = "${chapter.bookId}.${chapter.chapterNumber + 1}"
+                                    }
+                                },
+                                enabled = chapter.chapterNumber < chapter.totalChapters
+                            ) {
+                                Text("Siguiente", fontSize = 12.sp)
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+                            }
                         }
                     }
                 }
@@ -570,26 +745,96 @@ fun BibleReaderScreen(
         }
     }
 
+    // Verse Action Dialog (Favorite, Note, Share)
+    selectedVerseForActions?.let { verse ->
+        val chapterRef = resolvedChapter?.reference ?: targetChapterId
+        val verseRef = "$chapterRef:${verse.number}"
+        val existingFav = favoriteVerses.firstOrNull { it.verseReference == verseRef }
+
+        AlertDialog(
+            onDismissRequest = { selectedVerseForActions = null },
+            title = { Text(verseRef, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Serif) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("«${verse.text}»", fontFamily = FontFamily.Serif)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilledTonalButton(
+                            onClick = {
+                                if (existingFav != null) {
+                                    viewModel.deleteFavoriteVerse(existingFav.id)
+                                    Toast.makeText(context, "Eliminado de favoritos", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text)
+                                    Toast.makeText(context, "Guardado en Favoritos ❤️", Toast.LENGTH_SHORT).show()
+                                }
+                                selectedVerseForActions = null
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                if (existingFav != null) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = null,
+                                tint = Color.Red,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (existingFav != null) "Quitar" else "Favorito", fontSize = 12.sp)
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                viewModel.shareVerse(context, verse.text, verseRef)
+                                selectedVerseForActions = null
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Compartir", fontSize = 12.sp)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            noteVerseInput = verseRef
+                            noteTextInput = ""
+                            selectedVerseForActions = null
+                            showNoteDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Escribir nota personal")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedVerseForActions = null }) {
+                    Text("Cerrar")
+                }
+            }
+        )
+    }
+
+    // Add Note Dialog
     if (showNoteDialog) {
         AlertDialog(
             onDismissRequest = { showNoteDialog = false },
-            title = { Text("Añadir Nota") },
+            title = { Text("Nueva Nota de Estudio") },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = noteVerseInput,
                         onValueChange = { noteVerseInput = it },
-                        label = { Text("Número de Versículo") },
+                        label = { Text("Referencia (ej. Juan 3:16)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = noteTextInput,
                         onValueChange = { noteTextInput = it },
-                        label = { Text("Tu nota") },
-                        modifier = Modifier.fillMaxWidth().height(120.dp),
-                        maxLines = 5
+                        label = { Text("Tu reflexión o apunte") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
@@ -599,14 +844,14 @@ fun BibleReaderScreen(
                         if (noteTextInput.isNotBlank()) {
                             viewModel.saveVerseNote(
                                 sectionId = targetChapterId,
-                                verseRef = noteVerseInput.ifBlank { "General" },
+                                verseRef = noteVerseInput.ifBlank { resolvedChapter?.reference ?: targetChapterId },
                                 note = noteTextInput
                             )
-                            noteVerseInput = ""
-                            noteTextInput = ""
                             showNoteDialog = false
+                            Toast.makeText(context, "Nota guardada (+10 XP) 📝", Toast.LENGTH_SHORT).show()
                         }
-                    }
+                    },
+                    enabled = noteTextInput.isNotBlank()
                 ) {
                     Text("Guardar")
                 }
@@ -617,5 +862,27 @@ fun BibleReaderScreen(
                 }
             }
         )
+    }
+}
+
+private fun highlightQuery(text: String, query: String) = buildAnnotatedString {
+    if (query.isBlank()) {
+        append(text)
+        return@buildAnnotatedString
+    }
+    var start = 0
+    val lowerText = text.lowercase()
+    val lowerQuery = query.lowercase()
+    while (start < text.length) {
+        val index = lowerText.indexOf(lowerQuery, start)
+        if (index == -1) {
+            append(text.substring(start))
+            break
+        }
+        append(text.substring(start, index))
+        withStyle(SpanStyle(background = Color(0xFFFFEB3B), color = Color.Black, fontWeight = FontWeight.Bold)) {
+            append(text.substring(index, index + query.length))
+        }
+        start = index + query.length
     }
 }

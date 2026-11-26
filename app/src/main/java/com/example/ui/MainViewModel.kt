@@ -12,15 +12,20 @@ import com.example.data.BibleSection
 import com.example.data.FavoriteVerse
 import com.example.data.GeminiClient
 import com.example.data.GroupChatMessage
+import com.example.data.NotificationHelper
 import com.example.data.Outing
 import com.example.data.OutingStatus
 import com.example.data.OutingStory
 import com.example.data.RecentChapter
 import com.example.data.Repository
 import com.example.data.RsvpChoice
+import com.example.data.SocialGroup
 import com.example.data.SocialRepository
+import com.example.data.SoundEffectsHelper
+import com.example.data.StudyEvent
 import com.example.data.UserProfile
 import com.example.data.VerseNote
+import com.example.data.todayIsoDate
 import com.example.ui.theme.ThemeMode
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -38,7 +43,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
 import java.util.UUID
 
 data class ChatMessage(
@@ -65,9 +72,15 @@ class MainViewModel(
     private val socialRepository: SocialRepository? = repository.firestore?.let { SocialRepository(it) }
 ) : ViewModel() {
 
+    private fun dateOffsetIso(daysOffset: Int): String {
+        val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, daysOffset) }
+        return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+    }
+
     // --- Two Worlds Switcher State ---
     val currentWorld = MutableStateFlow(AppWorld.WORLD_1_SOCIAL)
     val world1Tab = MutableStateFlow("profile") // "profile", "outings", "map", "chat", "games"
+    val world2ActiveTab = MutableStateFlow("library")
     val showSettingsModal = MutableStateFlow(false)
     val showSocialAgentModal = MutableStateFlow(false)
     val showCameraStoriesModal = MutableStateFlow(false)
@@ -76,7 +89,7 @@ class MainViewModel(
     val notificationsEnabled = MutableStateFlow(true)
     val soundEffectsEnabled = MutableStateFlow(true)
 
-    // --- Theme State (Defaults to Modern Social Light Mode) ---
+    // --- Theme State (Persisted via DataStore) ---
     val themeMode = MutableStateFlow(ThemeMode.SOCIAL_CLARO)
 
     // --- Auth & Cloud Session State ---
@@ -84,11 +97,14 @@ class MainViewModel(
     val isUserLoggedIn = MutableStateFlow(false)
     val userEmail = MutableStateFlow("")
     val authStatusMessage = MutableStateFlow<String?>(null)
+    val activeSocialGroup = MutableStateFlow<SocialGroup?>(null)
 
     private var profileJob: Job? = null
+    private var groupJob: Job? = null
     private var outingsJob: Job? = null
     private var chatJob: Job? = null
     private var storiesJob: Job? = null
+    private var observedGroupId: String? = null
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         val user = firebaseAuth.currentUser
@@ -103,57 +119,57 @@ class MainViewModel(
             startCloudObservers(user.uid)
         } else {
             stopCloudObservers()
+            activeSocialGroup.value = null
+            observedGroupId = null
         }
     }
 
     // --- World 1: User Profile, Tastes/Curiosities & Group ---
-    val userProfile = MutableStateFlow(
-        UserProfile(
-            userId = "local_user",
-            username = "Alex_Quedadas",
-            bio = "Organizando los mejores planes del grupo ✨ | Mapas, rutas y juegos",
-            avatarUrl = "avatar_neon",
-            curiosities = listOf(
-                "🍕 Fanático de las pizzas artesanales",
-                "🎳 Campeón invicto en los bolos",
-                "🏔️ Rutas de montaña los sábados",
-                "🎮 Rey del Impostor y 2048",
-                "📸 Fotógrafo oficial de las salidas"
-            ),
-            groupId = "GRUPO-QUEDADAS",
-            groupInviteCode = "QUEDA-2026",
-            groupName = "Peña Los Inseparables 🔥",
-            gamesHighScore = 340L
-        )
+    private val defaultGuestProfile = UserProfile(
+        userId = "local_user",
+        username = "Alex_Quedadas",
+        bio = "Organizando los mejores planes del grupo ✨ | Mapas, rutas y juegos",
+        avatarUrl = "avatar_neon",
+        curiosities = listOf(
+            "🍕 Fanático de las pizzas artesanales",
+            "🎳 Campeón invicto en los bolos",
+            "🏔️ Rutas de montaña los sábados",
+            "🎮 Rey del Impostor y 2048",
+            "📸 Fotógrafo oficial de las salidas"
+        ),
+        groupId = "QUEDA-2026",
+        groupInviteCode = "QUEDA-2026",
+        groupName = "Peña Los Inseparables 🔥",
+        gamesHighScore = 340L
     )
 
-    val groupMembers = MutableStateFlow(
-        listOf(
-            "Alex (Tú) 👑",
-            "Sofía ✨",
-            "Mateo 🎸",
-            "Valeria 📸",
-            "Lucas 🍕",
-            "Elena 🌟"
-        )
-    )
+    val userProfile = MutableStateFlow(defaultGuestProfile)
 
-    // --- World 1: Outings (Salidas y Quedadas) ---
-    // Includes Tuesday Nov 10 Confirmed (double green circle), Planned (gray circle), and Cancelled (red circle)
+    private val defaultGuestMembers = listOf(
+        "Alex (Tú) 👑",
+        "Sofía ✨",
+        "Mateo 🎸",
+        "Valeria 📸",
+        "Lucas 🍕",
+        "Elena 🌟"
+    )
+    val groupMembers = MutableStateFlow(defaultGuestMembers)
+
+    // --- World 1: Outings (Salidas y Quedadas) with dynamic dates relative to today ---
     private val defaultOutings = listOf(
         Outing(
-            id = "outing_nov10_confirmed",
+            id = "outing_upcoming_confirmed",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
             title = "Cena & Noche de Bolera",
             location = "Ozone Bowling & Burger Plaza",
             meetingPoint = "Fuente de la Plaza Mayor (Entrada Norte)",
-            dateIso = "2026-11-10", // Martes 10 de noviembre (Doble círculo verde)
+            dateIso = dateOffsetIso(2),
             time = "20:30",
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "18 €",
             kitItems = "Calcetines para bolera, carnet joven y batería portátil",
-            additionalInfo = "¡Reserva confirmada a nombre de Alex! Puntualidad para no perder la pista 4.",
+            additionalInfo = "¡Reserva confirmada! Puntualidad para no perder la pista 4.",
             placePhotoUrl = "preset_bowling",
             destLat = 40.4168,
             destLng = -3.7038,
@@ -166,13 +182,13 @@ class MainViewModel(
             albumPhotos = listOf("memory_bowling_1", "memory_burger_2", "memory_selfie_3")
         ),
         Outing(
-            id = "outing_nov14_planned",
+            id = "outing_upcoming_planned",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
             title = "Ruta de Senderismo y Picnic",
             location = "Mirador del Valle Verde",
             meetingPoint = "Estación Central - Andén 2",
-            dateIso = "2026-11-14", // Sábado 14 de noviembre (Círculo gris: Pensada)
+            dateIso = dateOffsetIso(6),
             time = "09:30",
             status = OutingStatus.PLANNED.name,
             budgetPerPerson = "12 €",
@@ -190,13 +206,13 @@ class MainViewModel(
             albumPhotos = listOf("memory_hiking_1")
         ),
         Outing(
-            id = "outing_nov19_cancelled",
+            id = "outing_upcoming_cancelled",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
             title = "Cine al Aire Libre",
             location = "Terraza Parque del Sur",
             meetingPoint = "Puerta de Alcalá",
-            dateIso = "2026-11-19", // Jueves 19 de noviembre (Círculo rojo: Cancelada)
+            dateIso = dateOffsetIso(11),
             time = "21:00",
             status = OutingStatus.CANCELLED.name,
             budgetPerPerson = "10 €",
@@ -214,13 +230,13 @@ class MainViewModel(
             albumPhotos = emptyList()
         ),
         Outing(
-            id = "outing_nov25_confirmed",
+            id = "outing_upcoming_escape",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
             title = "Tarde de Escape Room & Helados",
             location = "Enigma Escape Center",
             meetingPoint = "Cafetería Sol (Esquina Reloj)",
-            dateIso = "2026-11-25",
+            dateIso = dateOffsetIso(16),
             time = "18:00",
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "22 €",
@@ -238,13 +254,13 @@ class MainViewModel(
             albumPhotos = listOf("memory_escape_1", "memory_icecream_2")
         ),
         Outing(
-            id = "outing_history_2025",
+            id = "outing_history_past",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
-            title = "Barbacoa de Verano 2025",
+            title = "Barbacoa en el Lago",
             location = "Lago Azul Club",
             meetingPoint = "Parking Norte",
-            dateIso = "2025-08-16",
+            dateIso = dateOffsetIso(-45),
             time = "13:00",
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "25 €",
@@ -266,14 +282,14 @@ class MainViewModel(
     val outings = MutableStateFlow<List<Outing>>(defaultOutings)
     val selectedOutingForDetail = MutableStateFlow<Outing?>(null)
 
-    // --- World 1: Group Social Chat Messages ---
+    // --- World 1: Group Social Chat Messages (Guest Mode Demo) ---
     private val defaultGroupChat = listOf(
         GroupChatMessage(
             id = "msg_1",
             senderId = "sofia_1",
             senderName = "Sofía ✨",
             groupId = "QUEDA-2026",
-            text = "¡Chicos! Ya marqué en el calendario el martes 10 de noviembre con el doble circulito verde 🟢 para la Cena y Bolera.",
+            text = "¡Chicos! Ya marqué la Cena & Noche de Bolera en el calendario con el doble circulito verde 🟢.",
             messageType = "TEXT",
             reactions = listOf("🔥", "❤️")
         ),
@@ -285,7 +301,7 @@ class MainViewModel(
             text = "Nota de voz (0:08)",
             messageType = "VOICE",
             audioDurationSec = 8L,
-            transcription = "Transcripción: ¡Genial! Yo llevo la batería portátil y nos vemos en el punto de encuentro de la Plaza Mayor a las ocho y media.",
+            transcription = "¡Genial! Yo llevo la batería portátil y nos vemos en el punto de encuentro a las ocho y media.",
             reactions = listOf("🙌", "👍")
         ),
         GroupChatMessage(
@@ -293,22 +309,23 @@ class MainViewModel(
             senderId = "valeria_3",
             senderName = "Valeria 📸",
             groupId = "QUEDA-2026",
-            text = "He subido una instantánea nueva en la camarita de Salidas 📷✨ ¡Miradla!",
+            text = "He subido una instantánea nueva en la cámara de Salidas 📷✨ ¡Miradla!",
             messageType = "OUTING_SHARE",
-            sharedOutingId = "outing_nov10_confirmed",
-            sharedOutingTitle = "Cena & Noche de Bolera (Mar 10 Nov • 18 €)",
+            sharedOutingId = "outing_upcoming_confirmed",
+            sharedOutingTitle = "Cena & Noche de Bolera (${dateOffsetIso(2)} • 18 €)",
             reactions = listOf("❤️")
         )
     )
     val groupChatMessages = MutableStateFlow<List<GroupChatMessage>>(defaultGroupChat)
 
-    // --- World 1: Instantáneas (Stories) ---
+    // --- World 1: Instantáneas (Stories) (Guest Mode Demo) ---
     private val defaultStories = listOf(
         OutingStory(
             id = "story_1",
             authorId = "valeria_3",
             authorName = "Valeria 📸",
-            caption = "¡Calentando motores para el martes 10 en la bolera! 🎳🔥",
+            groupId = "QUEDA-2026",
+            caption = "¡Calentando motores para la noche de bolera! 🎳🔥",
             filterStyle = "NEON_VIBES",
             mediaUri = "story_bowling_neon",
             outingTitle = "Cena & Noche de Bolera",
@@ -318,6 +335,7 @@ class MainViewModel(
             id = "story_2",
             authorId = "sofia_1",
             authorName = "Sofía ✨",
+            groupId = "QUEDA-2026",
             caption = "Vistas del Mirador para la ruta del sábado 🏔️🌿",
             filterStyle = "GOLDEN_SUNSET",
             mediaUri = "story_mountain_sunset",
@@ -328,6 +346,7 @@ class MainViewModel(
             id = "story_3",
             authorId = "mateo_2",
             authorName = "Mateo 🎸",
+            groupId = "QUEDA-2026",
             caption = "¿Quién ganará hoy al Impostor en la quedada? 🕵️‍♂️🍕",
             filterStyle = "CYBER_RETRO",
             mediaUri = "story_pizza_party",
@@ -342,13 +361,13 @@ class MainViewModel(
         listOf(
             ChatMessage(
                 "ai",
-                "¡Hola! Soy tu Agente IA de Salidas y Quedadas 🤖✨. Puedo crear salidas automáticamente en el calendario y el mapa, cambiar su color (Confirmada 🟢, Pensada ⚪, Cancelada 🔴), anotar tu asistencia o sugerirte planes y presupuestos. ¿Qué organizamos hoy?"
+                "¡Hola! Soy tu Agente IA de Salidas y Quedadas 🤖✨. Puedo crear salidas automáticamente en el calendario y el mapa, cambiar su estado (Confirmada 🟢, Pensada ⚪, Cancelada 🔴), anotar tu asistencia, actualizar el kit o sugerirte planes. ¿Qué organizamos hoy?"
             )
         )
     )
     val isSocialAgentBusy = MutableStateFlow(false)
 
-    // --- World 2: Bible & Spiritual Study State (Preserved) ---
+    // --- World 2: Bible & Spiritual Study State ---
     val searchTerm = MutableStateFlow("")
     val activeCategory = MutableStateFlow("Todos")
 
@@ -356,6 +375,9 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val recentChapters: StateFlow<List<RecentChapter>> = repository.recentChapters
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val studyEvents: StateFlow<List<StudyEvent>> = repository.studyEvents
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val sectionsState: StateFlow<List<BibleSection>> = combine(
@@ -376,6 +398,9 @@ class MainViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allSectionsUnfiltered: StateFlow<List<BibleSection>> = repository.allSections
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val selectedSection = MutableStateFlow<BibleSection?>(null)
     val textSizeSp = MutableStateFlow(18f)
     val textPaddingDp = MutableStateFlow(16f)
@@ -389,7 +414,7 @@ class MainViewModel(
         listOf(
             ChatMessage(
                 "saulo",
-                "Bienvenido al Mundo Bíblico de estudio y reflexión espiritual. Dialoguemos sobre las Escrituras, el Tabernáculo o cualquier pasaje que desees profundizar."
+                "Bienvenido al Mundo Bíblico de estudio y reflexión espiritual. Pregúntame sobre cualquier pasaje, pídemelo en el lector o agenda una sesión de estudio."
             )
         )
     )
@@ -430,6 +455,20 @@ class MainViewModel(
             options = listOf("Apocalipsis", "Judas", "Malaquías"),
             correctIndex = 0,
             explanation = "¡Correcto! Apocalipsis es el último libro y trata sobre las revelaciones proféticas."
+        ),
+        TriviaQuestion(
+            id = 6,
+            question = "¿En qué camino tuvo Saulo de Tarso su encuentro transformador con Jesús?",
+            options = listOf("Camino a Jericó", "Camino a Damasco", "Camino a Emaús"),
+            correctIndex = 1,
+            explanation = "¡Exacto! En Hechos 9, Saulo iba camino a Damasco cuando una luz del cielo lo rodeó."
+        ),
+        TriviaQuestion(
+            id = 7,
+            question = "¿Qué salmo comienza con «Jehová es mi pastor; nada me faltará»?",
+            options = listOf("Salmo 23", "Salmo 91", "Salmo 119"),
+            correctIndex = 0,
+            explanation = "¡Así es! El Salmo 23 de David es uno de los cantos de confianza más conocidos de las Escrituras."
         )
     )
 
@@ -437,7 +476,7 @@ class MainViewModel(
     val triviaAnsweredStatus = MutableStateFlow<Int?>(null)
 
     private val generativeModel by lazy {
-        Firebase.ai.generativeModel("gemini-3.8-flash")
+        Firebase.ai.generativeModel(GeminiClient.MODEL_NAME)
     }
 
     var chapterExplanation = MutableStateFlow<String?>(null)
@@ -447,8 +486,25 @@ class MainViewModel(
 
     init {
         updateAchievements()
+        // Restore persisted user preferences from DataStore
+        viewModelScope.launch {
+            repository.preferences.settingsFlow
+                .catch { e -> Log.w("MainViewModel", "Preferences flow error: ${e.message}") }
+                .collect { prefs ->
+                    themeMode.value = prefs.themeMode
+                    defaultCurrency.value = prefs.defaultCurrency
+                    notificationsEnabled.value = prefs.notificationsEnabled
+                    soundEffectsEnabled.value = prefs.soundEffectsEnabled
+                    textSizeSp.value = prefs.textSizeSp
+                    textPaddingDp.value = prefs.textPaddingDp
+                    bibleVersion.value = prefs.bibleVersion
+                    world2ActiveTab.value = prefs.world2ActiveTab
+                }
+        }
         try {
-            FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
+            if (repository.isFirebaseAvailable) {
+                FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
+            }
         } catch (e: Exception) {
             Log.w("MainViewModel", "FirebaseAuth listener registration skipped: ${e.message}")
         }
@@ -457,74 +513,143 @@ class MainViewModel(
     override fun onCleared() {
         super.onCleared()
         try {
-            FirebaseAuth.getInstance().removeAuthStateListener(authStateListener)
+            if (repository.isFirebaseAvailable) {
+                FirebaseAuth.getInstance().removeAuthStateListener(authStateListener)
+            }
         } catch (_: Exception) {
         }
         stopCloudObservers()
     }
 
-    // --- Cloud Realtime Observers ---
+    fun playFeedbackSound(success: Boolean = true) {
+        if (success) {
+            SoundEffectsHelper.playSuccess(soundEffectsEnabled.value)
+        } else {
+            SoundEffectsHelper.playTap(soundEffectsEnabled.value)
+        }
+    }
+
+    // --- Cloud Realtime Observers (Multi-User Group Scoped) ---
     private fun startCloudObservers(uid: String) {
         val repo = socialRepository ?: return
         stopCloudObservers()
 
         profileJob = viewModelScope.launch {
             repo.observeUserProfile(uid)
-                .catch { e -> Log.w("MainViewModel", "Profile observer error: ${e.message}") }
+                .catch { e ->
+                    Log.w("MainViewModel", "Profile observer error: ${e.message}")
+                    authStatusMessage.value = "Error al leer perfil en la nube: ${e.localizedMessage ?: "sin conexión"}"
+                }
                 .collect { remoteProfile ->
                     if (remoteProfile != null) {
                         userProfile.value = remoteProfile
+                        val targetGroup = remoteProfile.groupId.ifBlank { remoteProfile.groupInviteCode.ifBlank { "QUEDA-2026" } }
+                        if (observedGroupId != targetGroup) {
+                            startGroupScopedObservers(uid, targetGroup, remoteProfile)
+                        }
                     } else {
-                        repo.saveUserProfile(userProfile.value.copy(userId = uid), uid)
+                        val initialProfile = userProfile.value.copy(userId = uid)
+                        repo.saveUserProfile(initialProfile, uid).onFailure { err ->
+                            authStatusMessage.value = "No se pudo guardar tu perfil: ${err.localizedMessage}"
+                        }
+                        startGroupScopedObservers(uid, initialProfile.groupId, initialProfile)
+                    }
+                }
+        }
+    }
+
+    private fun startGroupScopedObservers(uid: String, groupId: String, profile: UserProfile) {
+        val repo = socialRepository ?: return
+        observedGroupId = groupId
+        groupJob?.cancel()
+        outingsJob?.cancel()
+        chatJob?.cancel()
+        storiesJob?.cancel()
+
+        // Ensure user is registered in /groups/{groupId} so Firestore rules grant shared group access
+        viewModelScope.launch {
+            repo.createOrEnsureGroup(
+                groupId = groupId,
+                groupName = profile.groupName,
+                creatorUid = uid,
+                creatorName = profile.username
+            ).onFailure { err ->
+                Log.w("MainViewModel", "Could not ensure group doc: ${err.message}")
+            }
+        }
+
+        groupJob = viewModelScope.launch {
+            repo.observeGroup(groupId)
+                .catch { e -> Log.w("MainViewModel", "Group observer error: ${e.message}") }
+                .collect { remoteGroup ->
+                    activeSocialGroup.value = remoteGroup
+                    if (remoteGroup != null) {
+                        val realMembers = remoteGroup.memberIds.map { memberUid ->
+                            val name = remoteGroup.memberNames[memberUid]?.ifBlank { "Miembro" } ?: "Miembro"
+                            if (memberUid == uid) "$name (Tú) 👑" else name
+                        }.ifEmpty { listOf("${profile.username} (Tú) 👑") }
+                        groupMembers.value = realMembers
+                        if (remoteGroup.name.isNotBlank() && userProfile.value.groupName != remoteGroup.name) {
+                            userProfile.value = userProfile.value.copy(groupName = remoteGroup.name)
+                        }
                     }
                 }
         }
 
         outingsJob = viewModelScope.launch {
-            repo.observeOutings(uid)
-                .catch { e -> Log.w("MainViewModel", "Outings observer error: ${e.message}") }
+            repo.observeGroupOutings(groupId)
+                .catch { e ->
+                    Log.w("MainViewModel", "Group outings observer error: ${e.message}")
+                    // Fallback to owner-scoped query if group doc is still propagating
+                    repo.observeOutings(uid)
+                        .catch { inner -> Log.w("MainViewModel", "Owner outings fallback error: ${inner.message}") }
+                        .collect { fallbackList -> outings.value = fallbackList }
+                }
                 .collect { remoteOutings ->
                     if (remoteOutings.isNotEmpty()) {
                         outings.value = remoteOutings
                     } else {
-                        // Seed initial outings to user's cloud account on first login
-                        defaultOutings.forEach { seed ->
-                            repo.createOuting(seed.copy(ownerId = uid), uid)
+                        val alreadySeeded = repository.preferences.hasSeededCloudForUser(uid)
+                        if (!alreadySeeded) {
+                            repository.preferences.markCloudSeededForUser(uid)
+                            defaultOutings.forEach { seed ->
+                                repo.createOuting(
+                                    seed.copy(ownerId = uid, groupId = groupId),
+                                    uid
+                                )
+                            }
+                        } else {
+                            outings.value = emptyList()
                         }
                     }
                 }
         }
 
         chatJob = viewModelScope.launch {
-            repo.observeChatMessages(uid)
+            repo.observeGroupChatMessages(groupId)
                 .catch { e -> Log.w("MainViewModel", "Chat observer error: ${e.message}") }
                 .collect { remoteMessages ->
-                    if (remoteMessages.isNotEmpty()) {
-                        val combined = (defaultGroupChat + remoteMessages)
-                            .distinctBy { it.id }
-                        groupChatMessages.value = combined
-                    }
+                    groupChatMessages.value = remoteMessages
                 }
         }
 
         storiesJob = viewModelScope.launch {
-            repo.observeStories(uid)
+            repo.observeGroupStories(groupId)
                 .catch { e -> Log.w("MainViewModel", "Stories observer error: ${e.message}") }
                 .collect { remoteStories ->
-                    if (remoteStories.isNotEmpty()) {
-                        val combined = (remoteStories + defaultStories).distinctBy { it.id }
-                        stories.value = combined
-                    }
+                    stories.value = remoteStories
                 }
         }
     }
 
     private fun stopCloudObservers() {
         profileJob?.cancel()
+        groupJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
         profileJob = null
+        groupJob = null
         outingsJob = null
         chatJob = null
         storiesJob = null
@@ -538,16 +663,37 @@ class MainViewModel(
     fun switchToWorld1Social() {
         currentWorld.value = AppWorld.WORLD_1_SOCIAL
         if (themeMode.value != ThemeMode.SOCIAL_CLARO && themeMode.value != ThemeMode.SOCIAL_OSCURO) {
-            themeMode.value = ThemeMode.SOCIAL_CLARO
+            updateThemeMode(ThemeMode.SOCIAL_CLARO)
         }
     }
 
+    fun setWorld2ActiveTab(tab: String) {
+        world2ActiveTab.value = tab
+        viewModelScope.launch { repository.preferences.setWorld2ActiveTab(tab) }
+    }
+
     fun toggleDarkLightSocialTheme() {
-        themeMode.value = if (themeMode.value == ThemeMode.SOCIAL_OSCURO) {
+        val next = if (themeMode.value == ThemeMode.SOCIAL_OSCURO) {
             ThemeMode.SOCIAL_CLARO
         } else {
             ThemeMode.SOCIAL_OSCURO
         }
+        updateThemeMode(next)
+    }
+
+    fun updateDefaultCurrency(currency: String) {
+        defaultCurrency.value = currency
+        viewModelScope.launch { repository.preferences.setDefaultCurrency(currency) }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        notificationsEnabled.value = enabled
+        viewModelScope.launch { repository.preferences.setNotificationsEnabled(enabled) }
+    }
+
+    fun setSoundEffectsEnabled(enabled: Boolean) {
+        soundEffectsEnabled.value = enabled
+        viewModelScope.launch { repository.preferences.setSoundEffectsEnabled(enabled) }
     }
 
     // --- World 1: Profile, Curiosities & Group Actions ---
@@ -590,31 +736,77 @@ class MainViewModel(
             groupId = code
         )
         userProfile.value = updated
-        persistProfileIfAuthenticated(updated)
-        authStatusMessage.value = "Grupo '$cleanName' creado con código $code"
+
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid != null && repo != null) {
+            viewModelScope.launch {
+                repo.createOrEnsureGroup(code, cleanName, uid, updated.username)
+                    .onSuccess {
+                        repo.saveUserProfile(updated, uid)
+                        startGroupScopedObservers(uid, code, updated)
+                        authStatusMessage.value = "Grupo '$cleanName' creado en la nube con código $code"
+                    }
+                    .onFailure { err ->
+                        authStatusMessage.value = "Error al crear grupo en la nube: ${err.localizedMessage}"
+                    }
+            }
+        } else {
+            groupMembers.value = listOf("${updated.username} (Tú) 👑")
+            authStatusMessage.value = "Grupo '$cleanName' creado con código $code (modo local)"
+        }
     }
 
     fun joinOutingGroupByCode(inviteCodeInput: String, groupNameHint: String = "") {
-        val cleanCode = inviteCodeInput.trim().uppercase()
-        if (cleanCode.isBlank()) return
-        val displayGroup = groupNameHint.trim().ifBlank { "Grupo $cleanCode" }
-        val updated = userProfile.value.copy(
-            groupId = cleanCode,
-            groupInviteCode = cleanCode,
-            groupName = displayGroup
-        )
-        userProfile.value = updated
-        if (!groupMembers.value.any { it.contains("Nuevo miembro") }) {
-            groupMembers.value = groupMembers.value + "Miembro ($cleanCode) 🎉"
+        val cleanCode = inviteCodeInput.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "")
+        if (cleanCode.isBlank()) {
+            authStatusMessage.value = "Introduce un código de invitación válido"
+            return
         }
-        persistProfileIfAuthenticated(updated)
-        authStatusMessage.value = "¡Te has unido al grupo con el código $cleanCode!"
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid != null && repo != null) {
+            viewModelScope.launch {
+                repo.joinGroupByCode(
+                    inviteCode = cleanCode,
+                    userId = uid,
+                    displayName = userProfile.value.username,
+                    fallbackName = groupNameHint.trim()
+                ).onSuccess { joinedGroup ->
+                    val updated = userProfile.value.copy(
+                        groupId = joinedGroup.id,
+                        groupInviteCode = joinedGroup.inviteCode,
+                        groupName = joinedGroup.name
+                    )
+                    userProfile.value = updated
+                    repo.saveUserProfile(updated, uid)
+                    startGroupScopedObservers(uid, joinedGroup.id, updated)
+                    authStatusMessage.value = "¡Te has unido al grupo '${joinedGroup.name}' ($cleanCode)!"
+                }.onFailure { err ->
+                    authStatusMessage.value = "No se pudo unir al grupo $cleanCode: ${err.localizedMessage}"
+                }
+            }
+        } else {
+            val displayGroup = groupNameHint.trim().ifBlank { "Grupo $cleanCode" }
+            val updated = userProfile.value.copy(
+                groupId = cleanCode,
+                groupInviteCode = cleanCode,
+                groupName = displayGroup
+            )
+            userProfile.value = updated
+            if (!groupMembers.value.any { it.contains(cleanCode) }) {
+                groupMembers.value = groupMembers.value + "Miembro ($cleanCode) 🎉"
+            }
+            authStatusMessage.value = "¡Te has unido al grupo con el código $cleanCode (modo local)!"
+        }
     }
 
     fun addMiniGameScore(points: Int) {
+        if (points <= 0) return
         val newScore = userProfile.value.gamesHighScore + points
         val updated = userProfile.value.copy(gamesHighScore = newScore)
         userProfile.value = updated
+        playFeedbackSound(true)
         persistProfileIfAuthenticated(updated)
     }
 
@@ -622,7 +814,9 @@ class MainViewModel(
         val uid = currentUserId.value ?: return
         val repo = socialRepository ?: return
         viewModelScope.launch {
-            repo.saveUserProfile(profile, uid)
+            repo.saveUserProfile(profile, uid).onFailure { err ->
+                authStatusMessage.value = "Error al guardar perfil: ${err.localizedMessage}"
+            }
         }
     }
 
@@ -630,16 +824,18 @@ class MainViewModel(
     fun saveOrUpdateOuting(outing: Outing) {
         val existingList = outings.value.toMutableList()
         val existingIdx = existingList.indexOfFirst { it.id == outing.id && outing.id.isNotBlank() }
+        val activeGroupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode }
         val finalOuting = if (outing.id.isBlank()) {
             outing.copy(
                 id = "outing_${UUID.randomUUID().toString().replace("-", "").take(12)}",
                 ownerId = currentUserId.value ?: "local_user",
-                groupId = userProfile.value.groupInviteCode
+                groupId = activeGroupId
             )
         } else {
-            outing
+            outing.copy(groupId = outing.groupId.ifBlank { activeGroupId })
         }
 
+        val isNew = existingIdx < 0
         if (existingIdx >= 0) {
             existingList[existingIdx] = finalOuting
         } else {
@@ -647,14 +843,21 @@ class MainViewModel(
         }
         outings.value = existingList.sortedBy { it.dateIso + " " + it.time }
 
+        if (isNew || finalOuting.outingStatus == OutingStatus.CONFIRMED) {
+            NotificationHelper.showOutingNotification(
+                context = repository.appContext,
+                enabled = notificationsEnabled.value,
+                title = if (isNew) "Nueva salida: ${finalOuting.title}" else "Salida actualizada: ${finalOuting.title}",
+                body = "${finalOuting.dateIso} a las ${finalOuting.time} • ${finalOuting.location}"
+            )
+        }
+
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                if (existingIdx >= 0) {
-                    repo.updateOuting(finalOuting.copy(ownerId = uid))
-                } else {
-                    repo.createOuting(finalOuting.copy(ownerId = uid), uid)
+                repo.upsertOuting(finalOuting, uid).onFailure { err ->
+                    authStatusMessage.value = "No se pudo sincronizar '${finalOuting.title}': ${err.localizedMessage}"
                 }
             }
         }
@@ -667,31 +870,68 @@ class MainViewModel(
 
     fun updateOutingRsvp(outingId: String, choice: RsvpChoice) {
         val target = outings.value.firstOrNull { it.id == outingId } ?: return
-        val prevChoice = target.rsvpChoice
-        var yes = target.rsvpYesCount
-        var maybe = target.rsvpMaybeCount
-        var no = target.rsvpNoCount
+        val uid = currentUserId.value ?: "local_user"
 
-        if (prevChoice == RsvpChoice.YES && yes > 0) yes--
-        if (prevChoice == RsvpChoice.MAYBE && maybe > 0) maybe--
-        if (prevChoice == RsvpChoice.NO && no > 0) no--
-
-        when (choice) {
-            RsvpChoice.YES -> yes++
-            RsvpChoice.MAYBE -> maybe++
-            RsvpChoice.NO -> no++
-            RsvpChoice.NONE -> {}
+        val updatedMap = target.rsvpByUser.toMutableMap()
+        if (choice == RsvpChoice.NONE) {
+            updatedMap.remove(uid)
+        } else {
+            updatedMap[uid] = choice.name
         }
 
-        val updated = target.copy(
-            myRsvp = choice.name,
-            rsvpYesCount = yes,
-            rsvpMaybeCount = maybe,
-            rsvpNoCount = no
-        )
-        saveOrUpdateOuting(updated)
+        val updated: Outing = if (target.rsvpByUser.isNotEmpty() || currentUserId.value != null) {
+            val yes = updatedMap.values.count { it == RsvpChoice.YES.name }.toLong()
+            val maybe = updatedMap.values.count { it == RsvpChoice.MAYBE.name }.toLong()
+            val no = updatedMap.values.count { it == RsvpChoice.NO.name }.toLong()
+            target.copy(
+                myRsvp = choice.name,
+                rsvpByUser = updatedMap,
+                rsvpYesCount = yes,
+                rsvpMaybeCount = maybe,
+                rsvpNoCount = no
+            )
+        } else {
+            val prevChoice = target.rsvpChoice
+            var yes = target.rsvpYesCount
+            var maybe = target.rsvpMaybeCount
+            var no = target.rsvpNoCount
+            if (prevChoice == RsvpChoice.YES && yes > 0) yes--
+            if (prevChoice == RsvpChoice.MAYBE && maybe > 0) maybe--
+            if (prevChoice == RsvpChoice.NO && no > 0) no--
+            when (choice) {
+                RsvpChoice.YES -> yes++
+                RsvpChoice.MAYBE -> maybe++
+                RsvpChoice.NO -> no++
+                RsvpChoice.NONE -> {}
+            }
+            target.copy(
+                myRsvp = choice.name,
+                rsvpByUser = updatedMap,
+                rsvpYesCount = yes,
+                rsvpMaybeCount = maybe,
+                rsvpNoCount = no
+            )
+        }
+
+        val currentList = outings.value.toMutableList()
+        val idx = currentList.indexOfFirst { it.id == outingId }
+        if (idx >= 0) {
+            currentList[idx] = updated
+            outings.value = currentList
+        }
         if (selectedOutingForDetail.value?.id == outingId) {
             selectedOutingForDetail.value = updated
+        }
+        playFeedbackSound(false)
+
+        val authUid = currentUserId.value
+        val repo = socialRepository
+        if (authUid != null && repo != null) {
+            viewModelScope.launch {
+                repo.updateOutingRsvpTransactional(outingId, authUid, choice).onFailure { err ->
+                    authStatusMessage.value = "Error al guardar tu asistencia: ${err.localizedMessage}"
+                }
+            }
         }
     }
 
@@ -702,7 +942,7 @@ class MainViewModel(
         lng: Double,
         placeLabel: String? = null
     ) {
-        val target = outings.value.firstOrNull { it.id == outingId } ?: outings.value.firstOrNull() ?: return
+        val target = outings.value.firstOrNull { it.id == outingId } ?: return
         val updated = if (isDestination) {
             target.copy(
                 destLat = lat,
@@ -731,7 +971,9 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.deleteOuting(outingId)
+                repo.deleteOuting(outingId).onFailure { err ->
+                    authStatusMessage.value = "Error al eliminar la salida: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -744,7 +986,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: "local_user",
             senderName = userProfile.value.username,
-            groupId = userProfile.value.groupInviteCode,
+            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
             text = clean,
             messageType = "TEXT"
         )
@@ -753,28 +995,38 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.sendChatMessage(msg, uid)
+                repo.sendChatMessage(msg, uid).onFailure { err ->
+                    authStatusMessage.value = "Error al enviar mensaje: ${err.localizedMessage}"
+                }
             }
         }
     }
 
-    fun sendGroupVoiceMessage(durationSec: Int, transcriptionText: String) {
+    fun sendGroupVoiceMessage(
+        durationSec: Int,
+        transcriptionText: String,
+        audioUrl: String = ""
+    ) {
+        val cleanDur = durationSec.coerceAtLeast(1)
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: "local_user",
             senderName = userProfile.value.username,
-            groupId = userProfile.value.groupInviteCode,
-            text = "Nota de voz (0:${durationSec.toString().padStart(2, '0')})",
+            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
+            text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
-            audioDurationSec = durationSec.toLong(),
-            transcription = "Transcripción: $transcriptionText"
+            audioDurationSec = cleanDur.toLong(),
+            audioUrl = audioUrl,
+            transcription = transcriptionText.trim()
         )
         groupChatMessages.value = groupChatMessages.value + msg
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.sendChatMessage(msg, uid)
+                repo.sendChatMessage(msg, uid).onFailure { err ->
+                    authStatusMessage.value = "Error al enviar nota de voz: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -784,7 +1036,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: "local_user",
             senderName = userProfile.value.username,
-            groupId = userProfile.value.groupInviteCode,
+            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
             text = "📌 ¡He compartido la salida '${outing.title}'! ¿Quién se apunta?",
             messageType = "OUTING_SHARE",
             sharedOutingId = outing.id,
@@ -795,7 +1047,9 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.sendChatMessage(msg, uid)
+                repo.sendChatMessage(msg, uid).onFailure { err ->
+                    authStatusMessage.value = "Error al compartir salida en el chat: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -817,7 +1071,9 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.updateMessageReactions(messageId, newReactions)
+                repo.updateMessageReactions(messageId, newReactions).onFailure { err ->
+                    authStatusMessage.value = "Error al actualizar reacción: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -833,6 +1089,7 @@ class MainViewModel(
             id = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             authorId = currentUserId.value ?: "local_user",
             authorName = userProfile.value.username,
+            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
             caption = caption.ifBlank { "¡Momento épico con el grupo! ✨" },
             filterStyle = filterStyle,
             mediaUri = mediaUri,
@@ -844,7 +1101,9 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.createStory(story, uid)
+                repo.createStory(story, uid).onFailure { err ->
+                    authStatusMessage.value = "Error al publicar instantánea: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -862,7 +1121,9 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.likeStory(storyId, newCount)
+                repo.likeStory(storyId, newCount).onFailure { err ->
+                    authStatusMessage.value = "Error al dar me gusta: ${err.localizedMessage}"
+                }
             }
         }
     }
@@ -889,10 +1150,10 @@ class MainViewModel(
                             title = actionResp.title.ifBlank { "Salida creada con IA" },
                             location = actionResp.location.ifBlank { "Centro" },
                             meetingPoint = actionResp.meetingPoint.ifBlank { "Punto de encuentro principal" },
-                            dateIso = actionResp.dateIso.ifBlank { "2026-11-10" },
+                            dateIso = actionResp.dateIso.ifBlank { todayIsoDate() },
                             time = actionResp.time.ifBlank { "20:00" },
                             status = actionResp.status.ifBlank { OutingStatus.CONFIRMED.name },
-                            budgetPerPerson = actionResp.budgetPerPerson.ifBlank { "15 €" },
+                            budgetPerPerson = actionResp.budgetPerPerson.ifBlank { "15 ${defaultCurrency.value}" },
                             kitItems = actionResp.kitItems,
                             additionalInfo = actionResp.additionalInfo
                         )
@@ -900,33 +1161,43 @@ class MainViewModel(
                         executionBanner = "\n\n✅ [Acción ejecutada: Salida '${newOuting.title}' añadida al calendario (${newOuting.dateIso}) y al mapa con estado ${newOuting.outingStatus.label}]"
                     }
                     "UPDATE_STATUS" -> {
-                        val target = outings.value.firstOrNull {
-                            actionResp.targetTitleQuery.isNotBlank() &&
-                                it.title.contains(actionResp.targetTitleQuery, ignoreCase = true)
-                        } ?: outings.value.firstOrNull()
+                        val target = findOutingByQuery(actionResp.targetTitleQuery)
                         if (target != null) {
                             val newSt = OutingStatus.fromString(actionResp.status)
                             updateOutingStatusColor(target.id, newSt)
                             executionBanner = "\n\n✅ [Acción ejecutada: Estado de '${target.title}' cambiado a ${newSt.label}]"
+                        } else {
+                            executionBanner = "\n\n⚠️ [No encontré una salida que coincida con '${actionResp.targetTitleQuery}'. Indica el nombre exacto.]"
                         }
                     }
                     "RSVP" -> {
-                        val target = outings.value.firstOrNull {
-                            actionResp.targetTitleQuery.isNotBlank() &&
-                                it.title.contains(actionResp.targetTitleQuery, ignoreCase = true)
-                        } ?: outings.value.firstOrNull()
+                        val target = findOutingByQuery(actionResp.targetTitleQuery)
                         if (target != null) {
                             val rsvp = RsvpChoice.fromString(actionResp.rsvpChoice)
                             updateOutingRsvp(target.id, rsvp)
                             executionBanner = "\n\n✅ [Acción ejecutada: Asistencia marcada como '${rsvp.label}' en '${target.title}']"
+                        } else {
+                            executionBanner = "\n\n⚠️ [No encontré una salida que coincida con '${actionResp.targetTitleQuery}'.]"
                         }
                     }
                     "UPDATE_KIT" -> {
-                        val target = outings.value.firstOrNull()
+                        val target = findOutingByQuery(actionResp.targetTitleQuery)
                         if (target != null && actionResp.kitItems.isNotBlank()) {
                             saveOrUpdateOuting(target.copy(kitItems = actionResp.kitItems))
                             executionBanner = "\n\n✅ [Acción ejecutada: Kit de la Quedada actualizado en '${target.title}']"
+                        } else if (target == null) {
+                            executionBanner = "\n\n⚠️ [No encontré la salida '${actionResp.targetTitleQuery}' para actualizar el kit.]"
                         }
+                    }
+                    "SWITCH_THEME" -> {
+                        val targetTheme = when (actionResp.themeTarget.uppercase()) {
+                            "DARK", "OSCURO" -> ThemeMode.SOCIAL_OSCURO
+                            "LIGHT", "CLARO" -> ThemeMode.SOCIAL_CLARO
+                            "ZEN" -> ThemeMode.MINIMALISTA
+                            else -> if (themeMode.value == ThemeMode.SOCIAL_OSCURO) ThemeMode.SOCIAL_CLARO else ThemeMode.SOCIAL_OSCURO
+                        }
+                        updateThemeMode(targetTheme)
+                        executionBanner = "\n\n✅ [Acción ejecutada: Tema cambiado a ${targetTheme.name}]"
                     }
                 }
 
@@ -940,7 +1211,58 @@ class MainViewModel(
         }
     }
 
-    // --- World 2: Preserved Bible & Spiritual Methods ---
+    private fun findOutingByQuery(query: String): Outing? {
+        val clean = query.trim()
+        if (clean.isBlank()) {
+            return if (outings.value.size == 1) outings.value.first() else null
+        }
+        return outings.value.firstOrNull {
+            it.title.contains(clean, ignoreCase = true) || it.location.contains(clean, ignoreCase = true)
+        }
+    }
+
+    // --- World 2: Study Calendar Events (Persisted in Room) ---
+    fun addStudyEvent(title: String, details: String, dateIso: String, time: String = "19:00") {
+        val cleanTitle = title.trim()
+        if (cleanTitle.isBlank()) return
+        viewModelScope.launch {
+            repository.insertStudyEvent(
+                StudyEvent(
+                    title = cleanTitle,
+                    details = details.trim(),
+                    dateIso = dateIso.ifBlank { todayIsoDate() },
+                    time = time.ifBlank { "19:00" }
+                )
+            )
+            NotificationHelper.showOutingNotification(
+                context = repository.appContext,
+                enabled = notificationsEnabled.value,
+                title = "Estudio agendado: $cleanTitle",
+                body = "${dateIso.ifBlank { todayIsoDate() }} • ${time.ifBlank { "19:00" }}"
+            )
+        }
+    }
+
+    fun toggleStudyEventCompleted(event: StudyEvent) {
+        viewModelScope.launch {
+            repository.setStudyEventCompleted(event.id, !event.completed)
+            if (!event.completed) {
+                repository.addPowerXP(25)
+                repository.updateStreak()
+                studyPoints.value = repository.getStudyPoints()
+                streakDays.value = repository.getStreakDays()
+                updateAchievements()
+            }
+        }
+    }
+
+    fun deleteStudyEvent(eventId: Int) {
+        viewModelScope.launch {
+            repository.deleteStudyEvent(eventId)
+        }
+    }
+
+    // --- World 2: Bible & Spiritual Methods ---
     fun saveRecentChapter(bibleId: String, chapterId: String, reference: String) {
         viewModelScope.launch {
             repository.insertRecentChapter(
@@ -950,6 +1272,8 @@ class MainViewModel(
                     reference = reference
                 )
             )
+            repository.updateStreak()
+            streakDays.value = repository.getStreakDays()
         }
     }
 
@@ -962,6 +1286,7 @@ class MainViewModel(
                     verseText = text
                 )
             )
+            playFeedbackSound(false)
         }
     }
 
@@ -1063,12 +1388,13 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun saveVerseNote(sectionId: String, verseRef: String, note: String) {
+        if (note.isBlank()) return
         viewModelScope.launch {
             repository.insertVerseNote(
                 VerseNote(
                     sectionId = sectionId,
                     verseReference = verseRef,
-                    noteText = note
+                    noteText = note.trim()
                 )
             )
             studyPoints.value = repository.getStudyPoints()
@@ -1086,6 +1412,7 @@ class MainViewModel(
 
     fun setBibleVersion(version: String) {
         bibleVersion.value = version
+        viewModelScope.launch { repository.preferences.setBibleVersion(version) }
     }
 
     fun toggleAnalytics(enabled: Boolean) {
@@ -1117,51 +1444,64 @@ class MainViewModel(
     }
 
     fun sendChatMessage(prompt: String) {
-        if (prompt.isBlank()) return
+        if (prompt.isBlank() || isGeneratingResponse.value) return
         val currentList = chatMessages.value.toMutableList()
-        currentList.add(ChatMessage("user", prompt))
+        currentList.add(ChatMessage("user", prompt.trim()))
         chatMessages.value = currentList
         isGeneratingResponse.value = true
 
         viewModelScope.launch {
-            val answer = GeminiClient.chatWithSaul(prompt)
-            var displayAnswer = answer
-            if (displayAnswer.contains("[CMD:FONT:")) {
-                val regex = "\\[CMD:FONT:(\\d+)]".toRegex()
-                val match = regex.find(displayAnswer)
-                match?.let {
-                    val size = it.groupValues[1].toFloatOrNull()
-                    if (size != null) updateTextSize(size)
-                    displayAnswer = displayAnswer.replace(it.value, "")
-                }
-            }
-            if (displayAnswer.contains("[CMD:THEME:ZEN]")) {
-                updateThemeMode(ThemeMode.MINIMALISTA)
-                displayAnswer = displayAnswer.replace("[CMD:THEME:ZEN]", "")
-            }
-            if (displayAnswer.contains("[CMD:EVENT:")) {
-                val regex = "\\[CMD:EVENT:(.*?)]".toRegex()
-                val match = regex.find(displayAnswer)
-                match?.let {
-                    displayAnswer = displayAnswer.replace(it.value, "\n[Evento agendado: ${it.groupValues[1]}]\n")
-                }
-            }
-            if (displayAnswer.contains("[CMD:VERSE:")) {
-                val regex = "\\[CMD:VERSE:(.*?)]".toRegex()
-                val match = regex.find(displayAnswer)
-                match?.let {
-                    setQuery(it.groupValues[1])
-                    displayAnswer = displayAnswer.replace(it.value, "\n[Versículo buscado: ${it.groupValues[1]}]\n")
-                }
-            }
+            try {
+                val answer = GeminiClient.chatWithSaul(prompt.trim())
+                var displayAnswer = answer
 
-            val updatedList = chatMessages.value.toMutableList()
-            updatedList.add(ChatMessage("ai", displayAnswer.trim()))
-            chatMessages.value = updatedList
-            isGeneratingResponse.value = false
-            repository.addPowerXP(25)
-            studyPoints.value = repository.getStudyPoints()
-            updateAchievements()
+                if (displayAnswer.contains("[CMD:FONT:")) {
+                    val regex = "\\[CMD:FONT:(\\d+)]".toRegex()
+                    regex.find(displayAnswer)?.let { match ->
+                        match.groupValues[1].toFloatOrNull()?.let { updateTextSize(it) }
+                        displayAnswer = displayAnswer.replace(match.value, "")
+                    }
+                }
+                if (displayAnswer.contains("[CMD:THEME:ZEN]")) {
+                    updateThemeMode(ThemeMode.MINIMALISTA)
+                    displayAnswer = displayAnswer.replace("[CMD:THEME:ZEN]", "")
+                }
+                if (displayAnswer.contains("[CMD:THEME:DEFAULT]")) {
+                    updateThemeMode(ThemeMode.PERGAMINO)
+                    displayAnswer = displayAnswer.replace("[CMD:THEME:DEFAULT]", "")
+                }
+                if (displayAnswer.contains("[CMD:EVENT:")) {
+                    val regex = "\\[CMD:EVENT:(.*?)]".toRegex()
+                    regex.find(displayAnswer)?.let { match ->
+                        val parts = match.groupValues[1].split("|")
+                        val evTitle = parts.getOrNull(0)?.trim().orEmpty().ifBlank { "Estudio Bíblico" }
+                        val evDetails = parts.getOrNull(1)?.trim().orEmpty()
+                        val evDate = parts.getOrNull(2)?.trim().orEmpty().ifBlank { todayIsoDate() }
+                        addStudyEvent(evTitle, evDetails, evDate)
+                        displayAnswer = displayAnswer.replace(
+                            match.value,
+                            "\n✅ [Evento guardado en tu Calendario Bíblico: $evTitle ($evDate)]\n"
+                        )
+                    }
+                }
+                if (displayAnswer.contains("[CMD:VERSE:")) {
+                    val regex = "\\[CMD:VERSE:(.*?)]".toRegex()
+                    regex.find(displayAnswer)?.let { match ->
+                        val ref = match.groupValues[1].trim()
+                        setQuery(ref)
+                        displayAnswer = displayAnswer.replace(match.value, "\n🔎 [Búsqueda preparada: $ref]\n")
+                    }
+                }
+
+                chatMessages.value = chatMessages.value + ChatMessage("ai", displayAnswer.trim())
+                repository.addPowerXP(25)
+                repository.updateStreak()
+                studyPoints.value = repository.getStudyPoints()
+                streakDays.value = repository.getStreakDays()
+                updateAchievements()
+            } finally {
+                isGeneratingResponse.value = false
+            }
         }
     }
 
@@ -1177,7 +1517,10 @@ class MainViewModel(
         triviaAnsweredStatus.value = selectedIndex
         if (selectedIndex == currentTrivia.value.correctIndex) {
             repository.addPowerXP(100)
+            repository.updateStreak()
             studyPoints.value = repository.getStudyPoints()
+            streakDays.value = repository.getStreakDays()
+            playFeedbackSound(true)
             updateAchievements()
         }
     }
@@ -1190,36 +1533,82 @@ class MainViewModel(
 
     private fun updateAchievements() {
         val points = repository.getStudyPoints()
+        val streak = repository.getStreakDays()
         val list = mutableListOf<String>()
-        if (points >= 100) list.add("Iniciado en el Templo (100 XP)")
-        if (points >= 200) list.add("Estudioso del Tabernáculo (200 XP)")
-        if (points >= 400) list.add("Compañero de Saulo (400 XP)")
-        if (points >= 600) list.add("Teólogo Imperial (600 XP)")
+        if (points >= 50) list.add("Primeros Pasos en la Palabra (50 XP)")
+        if (points >= 150) list.add("Estudioso del Tabernáculo (150 XP)")
+        if (points >= 350) list.add("Compañero de Estudio (350 XP)")
+        if (points >= 600) list.add("Teólogo Dedicado (600 XP)")
+        if (streak >= 3) list.add("Racha Constante ($streak días)")
         unlockedAchievements.value = list
     }
 
     fun updateThemeMode(mode: ThemeMode) {
         themeMode.value = mode
+        viewModelScope.launch { repository.preferences.setThemeMode(mode) }
     }
 
     fun updateTextSize(size: Float) {
-        textSizeSp.value = size
+        val clamped = size.coerceIn(12f, 34f)
+        textSizeSp.value = clamped
+        viewModelScope.launch { repository.preferences.setTextSizeSp(clamped) }
+    }
+
+    fun updateTextPadding(padding: Float) {
+        val clamped = padding.coerceIn(8f, 32f)
+        textPaddingDp.value = clamped
+        viewModelScope.launch { repository.preferences.setTextPaddingDp(clamped) }
     }
 
     fun handleSyncWithFirebase() {
         val uid = currentUserId.value
-        if (uid != null) {
-            persistProfileIfAuthenticated(userProfile.value)
-            authStatusMessage.value = "Datos sincronizados en Firebase Cloud Firestore"
-        } else {
+        val repo = socialRepository
+        if (uid == null || repo == null) {
             authStatusMessage.value = "Inicia sesión con Google para sincronizar en la nube"
+            return
+        }
+        viewModelScope.launch {
+            authStatusMessage.value = "Sincronizando perfil, grupo y salidas..."
+            val profileResult = repo.saveUserProfile(userProfile.value.copy(userId = uid), uid)
+            val groupResult = repo.createOrEnsureGroup(
+                groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
+                groupName = userProfile.value.groupName,
+                creatorUid = uid,
+                creatorName = userProfile.value.username
+            )
+            var outingFailures = 0
+            outings.value.forEach { outing ->
+                val res = repo.upsertOuting(outing.copy(groupId = userProfile.value.groupId), uid)
+                if (res.isFailure) outingFailures++
+            }
+
+            if (profileResult.isSuccess && groupResult.isSuccess && outingFailures == 0) {
+                authStatusMessage.value = "✅ Sincronización completada con Firebase Firestore"
+                playFeedbackSound(true)
+            } else {
+                val reason = profileResult.exceptionOrNull()?.localizedMessage
+                    ?: groupResult.exceptionOrNull()?.localizedMessage
+                    ?: "$outingFailures salidas no pudieron sincronizarse"
+                authStatusMessage.value = "⚠️ Sincronización parcial: $reason"
+            }
         }
     }
 
     fun handleLogout() {
+        stopCloudObservers()
         repository.logout()
+        GeminiClient.resetSessions()
+        currentUserId.value = null
         isUserLoggedIn.value = false
         userEmail.value = ""
+        activeSocialGroup.value = null
+        observedGroupId = null
+        userProfile.value = defaultGuestProfile
+        groupMembers.value = defaultGuestMembers
+        outings.value = defaultOutings
+        groupChatMessages.value = defaultGroupChat
+        stories.value = defaultStories
+        authStatusMessage.value = "Sesión cerrada correctamente"
     }
 
     fun scheduleCalendarEvent(context: Context, section: BibleSection) {

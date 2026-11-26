@@ -26,7 +26,63 @@ service cloud.firestore {
     function isValidStringList(listVal, maxLen) {
       return listVal is list &&
              listVal.size() <= maxLen &&
-             (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 500));
+             (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 500)) &&
+             (listVal.size() <= 1 || (listVal[listVal.size() - 1] is string && listVal[listVal.size() - 1].size() <= 500));
+    }
+
+    function isGroupMember(groupId) {
+      return isSignedIn() &&
+             isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)) &&
+             request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+    }
+
+    // 0. SocialGroup Validation Blueprint
+    function isValidGroup(data) {
+      return data.keys().hasAll([
+               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt'
+             ]) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.inviteCode is string && data.inviteCode.size() >= 1 && data.inviteCode.size() <= 32 &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             isValidStringList(data.memberIds, 50) &&
+             data.memberNames is map && data.memberNames.size() <= 50 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /groups/{groupId} {
+      // Any signed-in user can look up a group by invite code to join it
+      allow get: if isSignedIn() && isValidId(groupId);
+      allow list: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+
+      allow create: if isSignedIn() &&
+                       isValidId(groupId) &&
+                       isValidGroup(incoming()) &&
+                       incoming().createdBy == request.auth.uid &&
+                       request.auth.uid in incoming().memberIds;
+
+      // Members can update group info; signed-in users with the code can join by adding themselves
+      allow update: if isSignedIn() &&
+                       isValidId(groupId) &&
+                       isValidGroup(incoming()) &&
+                       incoming().createdBy == existing().createdBy &&
+                       incoming().inviteCode == existing().inviteCode &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         request.auth.uid in existing().memberIds ||
+                         (
+                           request.auth.uid in incoming().memberIds &&
+                           incoming().memberIds.hasAll(existing().memberIds) &&
+                           incoming().memberIds.size() <= existing().memberIds.size() + 1 &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(groupId) && existing().createdBy == request.auth.uid;
     }
 
     // 1. UserProfile Validation Blueprint
@@ -91,9 +147,9 @@ service cloud.firestore {
                'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
                'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
                'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-               'rsvpNoCount', 'myRsvp', 'albumPhotos', 'createdAt', 'updatedAt'
+               'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'createdAt', 'updatedAt'
              ]) &&
-             data.ownerId is string && data.ownerId == request.auth.uid && data.ownerId.size() <= 128 &&
+             data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
              data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.location is string && data.location.size() >= 1 && data.location.size() <= 200 &&
@@ -113,14 +169,17 @@ service cloud.firestore {
              data.rsvpMaybeCount is int && data.rsvpMaybeCount >= 0 &&
              data.rsvpNoCount is int && data.rsvpNoCount >= 0 &&
              data.myRsvp is string && data.myRsvp in ['YES', 'MAYBE', 'NO', 'NONE'] &&
+             (!('rsvpByUser' in data) || (data.rsvpByUser is map && data.rsvpByUser.size() <= 50)) &&
              isValidStringList(data.albumPhotos, 20) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
     match /outings/{outingId} {
-      allow get: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(outingId) &&
+                    (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId));
+      allow list: if isSignedIn() &&
+                     (resource.data.ownerId == request.auth.uid || isGroupMember(resource.data.groupId));
 
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
@@ -130,7 +189,7 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
-                       existing().ownerId == request.auth.uid &&
+                       (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId)) &&
                        incoming().ownerId == existing().ownerId &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
@@ -138,7 +197,7 @@ service cloud.firestore {
                          'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
                          'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
                          'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-                         'rsvpNoCount', 'myRsvp', 'albumPhotos', 'updatedAt'
+                         'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'updatedAt'
                        ]);
 
       allow delete: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
@@ -153,15 +212,16 @@ service cloud.firestore {
              ]) &&
              data.keys().hasOnly([
                'senderId', 'senderName', 'groupId', 'text', 'messageType',
-               'audioDurationSec', 'transcription', 'sharedOutingId',
+               'audioDurationSec', 'audioUrl', 'transcription', 'sharedOutingId',
                'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
              ]) &&
-             data.senderId is string && data.senderId == request.auth.uid && data.senderId.size() <= 128 &&
+             data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
              data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
              data.text is string && data.text.size() <= 1000 &&
              data.messageType is string && data.messageType in ['TEXT', 'VOICE', 'OUTING_SHARE', 'STORY_REACTION'] &&
              data.audioDurationSec is int && data.audioDurationSec >= 0 &&
+             (!('audioUrl' in data) || (data.audioUrl is string && data.audioUrl.size() <= 500)) &&
              data.transcription is string && data.transcription.size() <= 1000 &&
              data.sharedOutingId is string && data.sharedOutingId.size() <= 128 &&
              data.sharedOutingTitle is string && data.sharedOutingTitle.size() <= 120 &&
@@ -171,8 +231,10 @@ service cloud.firestore {
     }
 
     match /chat_messages/{messageId} {
-      allow get: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.senderId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(messageId) &&
+                    (existing().senderId == request.auth.uid || isGroupMember(existing().groupId));
+      allow list: if isSignedIn() &&
+                     (resource.data.senderId == request.auth.uid || isGroupMember(resource.data.groupId));
 
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
@@ -182,12 +244,14 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
-                       existing().senderId == request.auth.uid &&
                        incoming().senderId == existing().senderId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'text', 'transcription', 'reactions', 'updatedAt'
-                       ]);
+                       (
+                         (existing().senderId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['text', 'transcription', 'reactions', 'updatedAt'])) ||
+                         (isGroupMember(existing().groupId) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']))
+                       );
 
       allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
     }
@@ -199,11 +263,12 @@ service cloud.firestore {
                'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
              ]) &&
              data.keys().hasOnly([
-               'authorId', 'authorName', 'caption', 'filterStyle',
+               'authorId', 'authorName', 'groupId', 'caption', 'filterStyle',
                'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
              ]) &&
-             data.authorId is string && data.authorId == request.auth.uid && data.authorId.size() <= 128 &&
+             data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
              data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             (!('groupId' in data) || (data.groupId is string && data.groupId.size() <= 128)) &&
              data.caption is string && data.caption.size() <= 300 &&
              data.filterStyle is string && data.filterStyle.size() <= 40 &&
              data.mediaUri is string && data.mediaUri.size() <= 500 &&
@@ -214,8 +279,10 @@ service cloud.firestore {
     }
 
     match /stories/{storyId} {
-      allow get: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(storyId) &&
+                    (existing().authorId == request.auth.uid || ('groupId' in existing() && isGroupMember(existing().groupId)));
+      allow list: if isSignedIn() &&
+                     (resource.data.authorId == request.auth.uid || ('groupId' in resource.data && isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&
@@ -225,12 +292,14 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidId(storyId) &&
                        isValidStory(incoming()) &&
-                       existing().authorId == request.auth.uid &&
                        incoming().authorId == existing().authorId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'caption', 'likesCount', 'updatedAt'
-                       ]);
+                       (
+                         (existing().authorId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'likesCount', 'updatedAt'])) ||
+                         ('groupId' in existing() && isGroupMember(existing().groupId) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']))
+                       );
 
       allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
     }

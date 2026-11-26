@@ -28,6 +28,113 @@ class SocialRepository(
         }
     }
 
+    // --- 0. Social Groups (Multi-user Collaboration) ---
+    fun observeGroup(groupId: String): Flow<SocialGroup?> {
+        return db.collection(GROUPS_COLLECTION)
+            .document(groupId)
+            .snapshots()
+            .map { snap ->
+                if (snap.exists()) {
+                    snap.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } else {
+                    null
+                }
+            }
+    }
+
+    suspend fun createOrEnsureGroup(
+        groupId: String,
+        groupName: String,
+        creatorUid: String = requireUserId(),
+        creatorName: String
+    ): Result<SocialGroup> = runCatching {
+        val cleanId = groupId.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "").take(32)
+            .ifBlank { "QUEDA-${(1000..9999).random()}" }
+        val docRef = db.collection(GROUPS_COLLECTION).document(cleanId)
+        try {
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                val current = existing.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                if (current != null && !current.memberIds.contains(creatorUid)) {
+                    val newIds = (current.memberIds + creatorUid).distinct().take(50)
+                    val newNames = current.memberNames + (creatorUid to creatorName.take(60).ifBlank { "Usuario" })
+                    docRef.update(
+                        mapOf(
+                            "memberIds" to newIds,
+                            "memberNames" to newNames,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    current.copy(memberIds = newIds, memberNames = newNames)
+                } else {
+                    current ?: SocialGroup(id = cleanId, name = groupName, inviteCode = cleanId, createdBy = creatorUid)
+                }
+            } else {
+                val group = SocialGroup(
+                    id = cleanId,
+                    name = groupName.take(80).ifBlank { "Grupo $cleanId" },
+                    inviteCode = cleanId,
+                    createdBy = creatorUid,
+                    memberIds = listOf(creatorUid),
+                    memberNames = mapOf(creatorUid to creatorName.take(60).ifBlank { "Usuario" })
+                )
+                docRef.set(group.toCreateMap(creatorUid, creatorName)).await()
+                group
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun joinGroupByCode(
+        inviteCode: String,
+        userId: String = requireUserId(),
+        displayName: String,
+        fallbackName: String = ""
+    ): Result<SocialGroup> = runCatching {
+        val cleanCode = inviteCode.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "").take(32)
+        require(cleanCode.isNotBlank()) { "El código de invitación no puede estar vacío" }
+        val docRef = db.collection(GROUPS_COLLECTION).document(cleanCode)
+        try {
+            val snap = docRef.get().await()
+            if (!snap.exists()) {
+                // Create the group on-the-fly if user entered a brand-new shared code
+                val name = fallbackName.ifBlank { "Grupo $cleanCode" }
+                val group = SocialGroup(
+                    id = cleanCode,
+                    name = name,
+                    inviteCode = cleanCode,
+                    createdBy = userId,
+                    memberIds = listOf(userId),
+                    memberNames = mapOf(userId to displayName.take(60).ifBlank { "Usuario" })
+                )
+                docRef.set(group.toCreateMap(userId, displayName)).await()
+                group
+            } else {
+                val existing = snap.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    ?: throw IllegalStateException("Grupo inválido")
+                val updatedIds = (existing.memberIds + userId).distinct().take(50)
+                val updatedNames = existing.memberNames + (userId to displayName.take(60).ifBlank { "Usuario" })
+                docRef.update(
+                    mapOf(
+                        "memberIds" to updatedIds,
+                        "memberNames" to updatedNames,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                existing.copy(memberIds = updatedIds, memberNames = updatedNames)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
     // --- 1. User Profile ---
     fun observeUserProfile(userId: String = requireUserId()): Flow<UserProfile?> {
         return db.collection(USERS_COLLECTION)
@@ -65,12 +172,14 @@ class SocialRepository(
     suspend fun saveUserProfile(profile: UserProfile, userId: String = requireUserId()): Result<Unit> = runCatching {
         val docRef = db.collection(USERS_COLLECTION).document(userId)
         try {
-            val snap = docRef.get().await()
-            if (snap.exists()) {
-                docRef.update(profile.toUpdateMap()).await()
-            } else {
-                docRef.set(profile.toCreateMap(userId)).await()
-            }
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (snap.exists()) {
+                    tx.update(docRef, profile.toUpdateMap())
+                } else {
+                    tx.set(docRef, profile.toCreateMap(userId))
+                }
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -83,6 +192,18 @@ class SocialRepository(
     fun observeOutings(userId: String = requireUserId()): Flow<List<Outing>> {
         return db.collection(OUTINGS_COLLECTION)
             .whereEqualTo("ownerId", userId)
+            .snapshots()
+            .map { querySnapshot ->
+                querySnapshot.toObjects(
+                    Outing::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedBy { it.dateIso + " " + it.time }
+            }
+    }
+
+    fun observeGroupOutings(groupId: String): Flow<List<Outing>> {
+        return db.collection(OUTINGS_COLLECTION)
+            .whereEqualTo("groupId", groupId)
             .snapshots()
             .map { querySnapshot ->
                 querySnapshot.toObjects(
@@ -137,11 +258,72 @@ class SocialRepository(
         }
     }
 
+    suspend fun upsertOuting(outing: Outing, userId: String = requireUserId()): Result<String> = runCatching {
+        val docId = outing.id.ifBlank { "outing_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
+        val docRef = db.collection(OUTINGS_COLLECTION).document(docId)
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (snap.exists()) {
+                    tx.update(docRef, outing.toUpdateMap())
+                } else {
+                    tx.set(docRef, outing.copy(id = docId).toCreateMap(userId))
+                }
+            }.await()
+            docId
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            throw e
+        }
+    }
+
     suspend fun updateOuting(outing: Outing): Result<Unit> = runCatching {
         require(outing.id.isNotBlank()) { "Outing ID must not be blank for update" }
         val docRef = db.collection(OUTINGS_COLLECTION).document(outing.id)
         try {
             docRef.update(outing.toUpdateMap()).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun updateOutingRsvpTransactional(
+        outingId: String,
+        userId: String = requireUserId(),
+        choice: RsvpChoice
+    ): Result<Unit> = runCatching {
+        val docRef = db.collection(OUTINGS_COLLECTION).document(outingId)
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (!snap.exists()) return@runTransaction
+                val current = snap.toObject(Outing::class.java) ?: return@runTransaction
+                val updatedMap = current.rsvpByUser.toMutableMap()
+                if (choice == RsvpChoice.NONE) {
+                    updatedMap.remove(userId)
+                } else {
+                    updatedMap[userId] = choice.name
+                }
+                val yesCount = updatedMap.values.count { it == RsvpChoice.YES.name }.toLong()
+                val maybeCount = updatedMap.values.count { it == RsvpChoice.MAYBE.name }.toLong()
+                val noCount = updatedMap.values.count { it == RsvpChoice.NO.name }.toLong()
+                tx.update(
+                    docRef,
+                    mapOf(
+                        "rsvpByUser" to updatedMap,
+                        "rsvpYesCount" to yesCount,
+                        "rsvpMaybeCount" to maybeCount,
+                        "rsvpNoCount" to noCount,
+                        "myRsvp" to choice.name,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -166,6 +348,18 @@ class SocialRepository(
     fun observeChatMessages(userId: String = requireUserId()): Flow<List<GroupChatMessage>> {
         return db.collection(CHAT_COLLECTION)
             .whereEqualTo("senderId", userId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(
+                    GroupChatMessage::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedBy { it.createdAt?.seconds ?: 0L }
+            }
+    }
+
+    fun observeGroupChatMessages(groupId: String): Flow<List<GroupChatMessage>> {
+        return db.collection(CHAT_COLLECTION)
+            .whereEqualTo("groupId", groupId)
             .snapshots()
             .map { snapshot ->
                 snapshot.toObjects(
@@ -219,6 +413,18 @@ class SocialRepository(
             }
     }
 
+    fun observeGroupStories(groupId: String): Flow<List<OutingStory>> {
+        return db.collection(STORIES_COLLECTION)
+            .whereEqualTo("groupId", groupId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(
+                    OutingStory::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+            }
+    }
+
     suspend fun createStory(story: OutingStory, userId: String = requireUserId()): Result<String> = runCatching {
         val docId = story.id.ifBlank { "story_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
         val docRef = db.collection(STORIES_COLLECTION).document(docId)
@@ -251,6 +457,7 @@ class SocialRepository(
     }
 
     companion object {
+        const val GROUPS_COLLECTION = "groups"
         const val USERS_COLLECTION = "users"
         const val OUTINGS_COLLECTION = "outings"
         const val CHAT_COLLECTION = "chat_messages"

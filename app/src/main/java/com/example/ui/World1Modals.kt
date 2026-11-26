@@ -1,6 +1,8 @@
 package com.example.ui
 
-import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,16 +67,21 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -82,15 +91,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import com.example.data.MediaStorageHelper
 import com.example.data.OutingStatus
 import com.example.data.OutingStory
 import com.example.ui.theme.StatusCancelledRed
 import com.example.ui.theme.StatusConfirmedGreen
 import com.example.ui.theme.StatusPlannedGray
 import com.example.ui.theme.ThemeMode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // ============================================================================
-// 1. CAMERA, PHOTO/VIDEO ALBUM & INSTAGRAM-STYLE INSTANTÁNEAS (STORIES) MODAL
+// 1. CAMERA, PHOTO/VIDEO ALBUM & ANIMATED INSTANTÁNEAS (STORIES) MODAL
 // ============================================================================
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -99,12 +113,17 @@ fun CameraAndStoriesModal(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val stories by viewModel.stories.collectAsState()
     val outings by viewModel.outings.collectAsState()
+    val currentUserId by viewModel.currentUserId.collectAsState()
 
-    var activeStoryViewer by remember { mutableStateOf<OutingStory?>(null) }
+    var activeStoryIndex by remember { mutableIntStateOf(-1) }
     var showCreateStorySheet by remember { mutableStateOf(false) }
-    var selectedOutingId by remember { mutableStateOf(outings.firstOrNull()?.id ?: "") }
+    var selectedOutingId by remember(outings) { mutableStateOf(outings.firstOrNull()?.id ?: "") }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    var cameraTargetIsStory by remember { mutableStateOf(false) }
+    var draftStoryPhotoUri by remember { mutableStateOf("") }
 
     val selectedOuting = outings.firstOrNull { it.id == selectedOutingId } ?: outings.firstOrNull()
 
@@ -112,8 +131,87 @@ fun CameraAndStoriesModal(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null && selectedOuting != null) {
-            viewModel.addPhotoToOutingAlbum(selectedOuting.id, uri.toString())
-            Toast.makeText(context, "Foto/Video guardado en el álbum de la salida 📸", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                val persisted = MediaStorageHelper.persistAndOptionallyUploadImage(
+                    context = context,
+                    sourceUri = uri,
+                    folder = "album",
+                    uid = currentUserId
+                )
+                viewModel.addPhotoToOutingAlbum(selectedOuting.id, persisted)
+                Toast.makeText(context, "Foto guardada en el álbum de '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val storyGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                draftStoryPhotoUri = MediaStorageHelper.persistAndOptionallyUploadImage(
+                    context = context,
+                    sourceUri = uri,
+                    folder = "stories",
+                    uid = currentUserId
+                )
+            }
+        }
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val capturedUri = pendingCameraUri
+        if (success && capturedUri != null) {
+            scope.launch {
+                val folder = if (cameraTargetIsStory) "stories" else "album"
+                val persisted = MediaStorageHelper.persistAndOptionallyUploadImage(
+                    context = context,
+                    sourceUri = capturedUri,
+                    folder = folder,
+                    uid = currentUserId
+                )
+                if (cameraTargetIsStory) {
+                    draftStoryPhotoUri = persisted
+                    showCreateStorySheet = true
+                } else if (selectedOuting != null) {
+                    viewModel.addPhotoToOutingAlbum(selectedOuting.id, persisted)
+                    Toast.makeText(context, "Captura guardada en '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        pendingCameraUri = null
+    }
+
+    fun launchRealCamera(forStory: Boolean) {
+        cameraTargetIsStory = forStory
+        try {
+            val (_, uri) = MediaStorageHelper.createCameraCaptureFile(context)
+            pendingCameraUri = uri
+            takePictureLauncher.launch(uri)
+        } catch (e: Exception) {
+            Toast.makeText(context, "No se pudo abrir la cámara: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchRealCamera(cameraTargetIsStory)
+        } else {
+            Toast.makeText(context, "Concede permiso de cámara para hacer fotos", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun requestCameraCapture(forStory: Boolean) {
+        cameraTargetIsStory = forStory
+        val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        if (hasPerm) {
+            launchRealCamera(forStory)
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -127,12 +225,12 @@ fun CameraAndStoriesModal(
                 .testTag("camera_and_stories_modal"),
             color = MaterialTheme.colorScheme.background
         ) {
-            if (activeStoryViewer != null) {
-                val st = stories.firstOrNull { it.id == activeStoryViewer?.id } ?: activeStoryViewer!!
+            if (activeStoryIndex in stories.indices) {
                 FullScreenStoryViewer(
-                    story = st,
-                    onLike = { viewModel.likeInstantaneaStory(st.id) },
-                    onClose = { activeStoryViewer = null }
+                    stories = stories,
+                    initialIndex = activeStoryIndex,
+                    onLike = { storyId -> viewModel.likeInstantaneaStory(storyId) },
+                    onClose = { activeStoryIndex = -1 }
                 )
             } else {
                 Column(
@@ -163,7 +261,7 @@ fun CameraAndStoriesModal(
                                     fontWeight = FontWeight.Black
                                 )
                                 Text(
-                                    text = "Fotos, videos e historias en vivo de las salidas",
+                                    text = "Fotos reales, galería e historias del grupo",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
                                 )
@@ -181,82 +279,81 @@ fun CameraAndStoriesModal(
 
                     // --- INSTANTÁNEAS (STORIES) SECTION ---
                     Text(
-                        text = "Instantáneas del Grupo ✨ (Estilo Instagram)",
+                        text = "Instantáneas del Grupo ✨",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        // Add New Instantánea Tile
                         item {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
-                                    .clickable { showCreateStorySheet = true }
+                                    .clickable {
+                                        draftStoryPhotoUri = ""
+                                        showCreateStorySheet = true
+                                    }
                                     .testTag("create_new_instantanea_btn")
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .size(74.dp)
                                         .clip(CircleShape)
-                                        .background(
-                                            Brush.linearGradient(
-                                                listOf(Color(0xFFEC4899), Color(0xFF6366F1))
-                                            )
-                                        ),
+                                        .background(MaterialTheme.colorScheme.primaryContainer)
+                                        .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.AddAPhoto,
-                                        contentDescription = "Subir instantánea",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(30.dp)
+                                        contentDescription = "Nueva Instantánea",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(28.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "+ Instantánea",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Text("Subir Historia", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
-                        // Existing Stories
-                        items(stories, key = { it.id }) { story ->
+                        itemsIndexed(stories, key = { _, s -> s.id }) { idx, story ->
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
                                     .width(78.dp)
-                                    .clickable { activeStoryViewer = story }
+                                    .clickable { activeStoryIndex = idx }
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .size(74.dp)
                                         .clip(CircleShape)
-                                        .background(
-                                            Brush.linearGradient(
-                                                listOf(
-                                                    Color(0xFFF59E0B),
-                                                    Color(0xFFEC4899),
-                                                    Color(0xFF8B5CF6)
-                                                )
-                                            )
+                                        .border(
+                                            width = 3.dp,
+                                            brush = Brush.linearGradient(
+                                                listOf(Color(0xFFEC4899), Color(0xFFF59E0B), Color(0xFF8B5CF6))
+                                            ),
+                                            shape = CircleShape
                                         )
-                                        .padding(3.dp)
+                                        .padding(4.dp)
                                         .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.surface),
-                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        text = when {
-                                            story.filterStyle.contains("SUNSET") -> "🌅"
-                                            story.filterStyle.contains("RETRO") -> "🍕"
-                                            else -> "🎳"
-                                        },
-                                        fontSize = 28.sp
-                                    )
+                                    if (MediaStorageHelper.isRenderableImageUri(story.mediaUri)) {
+                                        AsyncImage(
+                                            model = MediaStorageHelper.toCoilModel(story.mediaUri),
+                                            contentDescription = story.caption,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(storyFilterBrush(story.filterStyle)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("✨", fontSize = 24.sp)
+                                        }
+                                    }
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -274,27 +371,17 @@ fun CameraAndStoriesModal(
                     HorizontalDivider()
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // --- SHARED OUTING PHOTO/VIDEO ALBUM ---
+                    // --- OUTING PHOTO ALBUM SECTION ---
                     Text(
-                        text = "Álbum de Recuerdos de la Salida 📸",
+                        text = "Álbum Compartido por Salida 📸",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
-                    Text(
-                        text = "Cualquier miembro puede subir fotos o videos, verlos, descargarlos o compartirlos",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Outing Selector for Album
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        outings.forEach { outing ->
-                            val isSel = outing.id == selectedOuting?.id
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(outings, key = { it.id }) { outing ->
+                            val isSel = selectedOuting?.id == outing.id
                             Surface(
                                 onClick = { selectedOutingId = outing.id },
                                 shape = RoundedCornerShape(14.dp),
@@ -303,9 +390,9 @@ fun CameraAndStoriesModal(
                             ) {
                                 Text(
                                     text = "${outing.title} (${outing.albumPhotos.size})",
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                 )
                             }
                         }
@@ -313,41 +400,31 @@ fun CameraAndStoriesModal(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Action Buttons: Tomar Instantánea / Subir de Galería
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Button(
                             onClick = {
                                 mediaPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
                             },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                            shape = RoundedCornerShape(14.dp)
+                            enabled = selectedOuting != null,
+                            modifier = Modifier.weight(1f).height(48.dp)
                         ) {
                             Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Subir Foto/Video", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Galería", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
-
                         FilledTonalButton(
-                            onClick = {
-                                selectedOuting?.let {
-                                    viewModel.addPhotoToOutingAlbum(
-                                        it.id,
-                                        "capture_${System.currentTimeMillis() % 1000}"
-                                    )
-                                    Toast.makeText(context, "¡Captura instantánea montada en el álbum! 📸", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                            shape = RoundedCornerShape(14.dp)
+                            onClick = { requestCameraCapture(forStory = false) },
+                            enabled = selectedOuting != null,
+                            modifier = Modifier.weight(1f).height(48.dp)
                         ) {
                             Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Captura Rápida", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Hacer Foto", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -356,94 +433,98 @@ fun CameraAndStoriesModal(
                     val photos = selectedOuting?.albumPhotos.orEmpty()
                     if (photos.isEmpty()) {
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth().padding(28.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "Aún no hay fotos en esta salida. ¡Sube la primera foto o video!",
-                                    textAlign = TextAlign.Center
-                                )
-                            }
+                            Text(
+                                text = "Todavía no hay fotos en esta salida. Usa 'Hacer Foto' o 'Galería' para añadir recuerdos reales.",
+                                modifier = Modifier.padding(20.dp),
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     } else {
-                        photos.forEachIndexed { idx, photoKey ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 10.dp),
-                                shape = RoundedCornerShape(20.dp)
-                            ) {
-                                Column {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(160.dp)
-                                            .background(
-                                                Brush.linearGradient(
-                                                    when (idx % 3) {
-                                                        0 -> listOf(Color(0xFF4F46E5), Color(0xFFEC4899))
-                                                        1 -> listOf(Color(0xFF059669), Color(0xFF0284C7))
-                                                        else -> listOf(Color(0xFFF59E0B), Color(0xFFDC2626))
-                                                    }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            photos.forEachIndexed { idx, photoUri ->
+                                Card(
+                                    shape = RoundedCornerShape(16.dp),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                                    modifier = Modifier.width(164.dp)
+                                ) {
+                                    Column {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(130.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (MediaStorageHelper.isRenderableImageUri(photoUri)) {
+                                                AsyncImage(
+                                                    model = MediaStorageHelper.toCoilModel(photoUri),
+                                                    contentDescription = "Recuerdo #${idx + 1}",
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
                                                 )
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text("📸 Recuerdo #${idx + 1}", color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                                            Text(
-                                                text = selectedOuting?.title ?: "",
-                                                color = Color.White.copy(alpha = 0.9f),
-                                                fontSize = 13.sp
-                                            )
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(
+                                                            Brush.linearGradient(
+                                                                listOf(
+                                                                    Color(0xFF6366F1),
+                                                                    Color(0xFFEC4899)
+                                                                )
+                                                            )
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                        Text("📸", fontSize = 30.sp)
+                                                        Text(
+                                                            text = "Recuerdo #${idx + 1}",
+                                                            color = Color.White,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 12.sp
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
-                                    }
-
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Subido al álbum del grupo ($photoKey)",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Row {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                                            horizontalArrangement = Arrangement.SpaceEvenly
+                                        ) {
                                             IconButton(
                                                 onClick = {
-                                                    Toast.makeText(
-                                                        context,
-                                                        "Foto descargada en la galería del dispositivo ✅",
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
+                                                    scope.launch {
+                                                        val saved = MediaStorageHelper.saveImageToGallery(context, photoUri)
+                                                        Toast.makeText(
+                                                            context,
+                                                            if (saved) "Guardada en Galería (Pictures/Adora) ✅"
+                                                            else "Solo las fotos reales pueden descargarse a la galería",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
                                                 }
                                             ) {
-                                                Icon(Icons.Default.Download, contentDescription = "Descargar foto")
+                                                Icon(Icons.Default.Download, contentDescription = "Descargar a galería", modifier = Modifier.size(18.dp))
                                             }
                                             IconButton(
                                                 onClick = {
-                                                    val send = Intent(Intent.ACTION_SEND).apply {
-                                                        type = "text/plain"
-                                                        putExtra(
-                                                            Intent.EXTRA_TEXT,
-                                                            "📸 Recuerdo de nuestra salida '${selectedOuting?.title}' en Adora"
-                                                        )
-                                                    }
-                                                    context.startActivity(Intent.createChooser(send, "Compartir recuerdo"))
+                                                    MediaStorageHelper.shareMediaOrText(
+                                                        context = context,
+                                                        uriOrPath = photoUri,
+                                                        caption = "Recuerdo de '${selectedOuting?.title ?: "nuestra salida"}' en Adora 📸✨"
+                                                    )
                                                 }
                                             ) {
-                                                Icon(Icons.Default.Share, contentDescription = "Compartir foto")
+                                                Icon(Icons.Default.Share, contentDescription = "Compartir foto", modifier = Modifier.size(18.dp))
                                             }
                                         }
                                     }
@@ -456,37 +537,89 @@ fun CameraAndStoriesModal(
         }
     }
 
+    // Create Story Dialog (supports real camera/gallery photo + filter + caption)
     if (showCreateStorySheet) {
         var caption by remember { mutableStateOf("") }
-        var filter by remember { mutableStateOf("NEON_VIBES") }
-        val filters = listOf("NEON_VIBES", "GOLDEN_SUNSET", "CYBER_RETRO")
+        var selectedFilter by remember { mutableStateOf("NEON_VIBES") }
+        val filters = listOf(
+            "NEON_VIBES" to "Neón ✨",
+            "GOLDEN_SUNSET" to "Atardecer 🌅",
+            "CYBER_RETRO" to "Retro 📼"
+        )
 
         AlertDialog(
             onDismissRequest = { showCreateStorySheet = false },
-            title = { Text("Crear Instantánea ✨", fontWeight = FontWeight.Black) },
+            title = { Text("Nueva Instantánea ✨", fontWeight = FontWeight.Black) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Live preview
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(storyFilterBrush(selectedFilter)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (MediaStorageHelper.isRenderableImageUri(draftStoryPhotoUri)) {
+                            AsyncImage(
+                                model = MediaStorageHelper.toCoilModel(draftStoryPhotoUri),
+                                contentDescription = "Vista previa de instantánea",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text("📸 Elige una foto o usa el fondo de filtro", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { requestCameraCapture(forStory = true) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Cámara", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                storyGalleryLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Galería", fontSize = 12.sp)
+                        }
+                    }
+
                     OutlinedTextField(
                         value = caption,
                         onValueChange = { caption = it },
-                        label = { Text("Texto sobre la instantánea") },
-                        placeholder = { Text("Ej: ¡Rumbo a la quedada! 🔥") },
+                        label = { Text("Texto o pie de historia") },
+                        placeholder = { Text("¡Momento épico con el grupo!") },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Text("Filtro Visual:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        filters.forEach { f ->
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        filters.forEach { (key, label) ->
+                            val isSel = selectedFilter == key
                             Surface(
-                                onClick = { filter = f },
+                                onClick = { selectedFilter = key },
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (filter == f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                contentColor = if (filter == f) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Text(
-                                    text = f.replace("_", " "),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
+                                    text = label,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 8.dp)
                                 )
                             }
                         }
@@ -498,14 +631,16 @@ fun CameraAndStoriesModal(
                     onClick = {
                         viewModel.publishInstantaneaStory(
                             caption = caption,
-                            filterStyle = filter,
-                            mediaUri = "story_${System.currentTimeMillis()}",
-                            outingTitle = selectedOuting?.title ?: "Salida en grupo"
+                            filterStyle = selectedFilter,
+                            mediaUri = draftStoryPhotoUri.ifBlank { "story_${System.currentTimeMillis()}" },
+                            outingTitle = selectedOuting?.title ?: "Quedada en grupo"
                         )
                         showCreateStorySheet = false
+                        draftStoryPhotoUri = ""
+                        Toast.makeText(context, "Instantánea publicada ✨", Toast.LENGTH_SHORT).show()
                     }
                 ) {
-                    Text("Publicar Instantánea")
+                    Text("Publicar")
                 }
             },
             dismissButton = {
@@ -517,40 +652,134 @@ fun CameraAndStoriesModal(
     }
 }
 
+private fun storyFilterBrush(filterStyle: String): Brush {
+    return when (filterStyle) {
+        "GOLDEN_SUNSET" -> Brush.linearGradient(listOf(Color(0xFFF97316), Color(0xFFEC4899), Color(0xFF7C3AED)))
+        "CYBER_RETRO" -> Brush.linearGradient(listOf(Color(0xFF0EA5E9), Color(0xFF6366F1), Color(0xFF1E1B4B)))
+        else -> Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899), Color(0xFFF59E0B)))
+    }
+}
+
 @Composable
 private fun FullScreenStoryViewer(
-    story: OutingStory,
-    onLike: () -> Unit,
+    stories: List<OutingStory>,
+    initialIndex: Int,
+    onLike: (String) -> Unit,
     onClose: () -> Unit
 ) {
-    val gradient = when {
-        story.filterStyle.contains("SUNSET") -> listOf(Color(0xFFF97316), Color(0xFFDB2777), Color(0xFF4F46E5))
-        story.filterStyle.contains("RETRO") -> listOf(Color(0xFF06B6D4), Color(0xFF3B82F6), Color(0xFF9333EA))
-        else -> listOf(Color(0xFF6366F1), Color(0xFFEC4899), Color(0xFF10B981))
+    var currentIndex by remember { mutableIntStateOf(initialIndex.coerceIn(0, stories.lastIndex.coerceAtLeast(0))) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    val story = stories.getOrNull(currentIndex) ?: return
+
+    LaunchedEffect(currentIndex, stories.size) {
+        progress = 0f
+        val steps = 50
+        for (i in 1..steps) {
+            delay(100L) // 5 seconds per story
+            progress = i.toFloat() / steps.toFloat()
+        }
+        if (currentIndex < stories.lastIndex) {
+            currentIndex++
+        } else {
+            onClose()
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(gradient))
-            .padding(20.dp)
+            .background(storyFilterBrush(story.filterStyle))
     ) {
-        Column(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)) {
-            LinearProgressIndicator(
-                progress = { 0.75f },
-                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.3f)
+        // Real photo background if available
+        if (MediaStorageHelper.isRenderableImageUri(story.mediaUri)) {
+            AsyncImage(
+                model = MediaStorageHelper.toCoilModel(story.mediaUri),
+                contentDescription = story.caption,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
             )
-            Spacer(modifier = Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Black.copy(alpha = 0.55f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.7f)
+                            )
+                        )
+                    )
+            )
+        }
+
+        // Left / Right tap zones for prev / next story
+        Row(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable {
+                        if (currentIndex > 0) currentIndex-- else progress = 0f
+                    }
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable {
+                        if (currentIndex < stories.lastIndex) currentIndex++ else onClose()
+                    }
+            )
+        }
+
+        // Top segmented animated progress bars + header
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                stories.forEachIndexed { idx, _ ->
+                    val barProgress = when {
+                        idx < currentIndex -> 1f
+                        idx == currentIndex -> progress
+                        else -> 0f
+                    }
+                    LinearProgressIndicator(
+                        progress = { barProgress },
+                        color = Color.White,
+                        trackColor = Color.White.copy(alpha = 0.35f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(story.authorName, color = Color.White, fontWeight = FontWeight.Black, fontSize = 16.sp)
-                    Text("📍 ${story.outingTitle} • ${story.filterStyle}", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                    Text(
+                        text = story.authorName,
+                        color = Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        text = "📍 ${story.outingTitle}",
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 12.sp
+                    )
                 }
                 IconButton(onClick = onClose) {
                     Icon(Icons.Default.Close, contentDescription = "Cerrar historia", tint = Color.White)
@@ -558,44 +787,47 @@ private fun FullScreenStoryViewer(
             }
         }
 
+        // Center / Lower caption
         Column(
-            modifier = Modifier.align(Alignment.Center).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 20.dp, vertical = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("✨📸✨", fontSize = 52.sp)
-            Spacer(modifier = Modifier.height(16.dp))
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.Black.copy(alpha = 0.45f)
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Black.copy(alpha = 0.45f),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     text = story.caption,
                     color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(20.dp)
+                    modifier = Modifier.padding(14.dp)
                 )
             }
-        }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Visible para todo el grupo",
-                color = Color.White.copy(alpha = 0.85f),
-                fontSize = 12.sp
-            )
-            Button(
-                onClick = onLike,
-                shape = RoundedCornerShape(20.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.Red)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("${story.likesCount} Me gusta", fontWeight = FontWeight.Bold)
+                Text(
+                    text = "${currentIndex + 1} / ${stories.size} • Toca izq/der para navegar",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp
+                )
+                Button(
+                    onClick = { onLike(story.id) },
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.Red)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("${story.likesCount} Me gusta", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
@@ -644,7 +876,7 @@ fun OutingHistoryModal(
                 OutlinedTextField(
                     value = filterQuery,
                     onValueChange = { filterQuery = it },
-                    placeholder = { Text("Filtrar por año (ej. 2025, 2026), mes o nombre...") },
+                    placeholder = { Text("Filtrar por año, mes o nombre...") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -693,7 +925,7 @@ fun OutingHistoryModal(
 }
 
 // ============================================================================
-// 3. AGENTIC AI ASSISTANT MODAL (ACCESSIBLE FROM PERFIL, SALIDAS & AJUSTES)
+// 3. AGENTIC AI ASSISTANT MODAL
 // ============================================================================
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -706,9 +938,9 @@ fun SocialAgentModal(
     var promptInput by remember { mutableStateOf("") }
 
     val quickPrompts = listOf(
-        "Crea salida Cena de Pizzas el martes 10 de noviembre a las 21:00 llevando 15€ confirmada",
-        "Pon como pensada (gris) la salida del sábado",
-        "Marca que asistiré a la próxima salida",
+        "Crea salida Cena de Pizzas este viernes a las 21:00 llevando 15€ confirmada",
+        "Pon como pensada (gris) la ruta de senderismo",
+        "Marca que asistiré a la Cena & Noche de Bolera",
         "¿Qué materiales llevamos en el Kit de la Quedada?"
     )
 
@@ -750,7 +982,7 @@ fun SocialAgentModal(
                 ) {
                     quickPrompts.forEach { qp ->
                         Surface(
-                            onClick = { viewModel.sendSocialAgentPrompt(qp) },
+                            onClick = { if (!isBusy) viewModel.sendSocialAgentPrompt(qp) },
                             shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer
                         ) {
@@ -822,20 +1054,25 @@ fun SocialAgentModal(
                     )
                     IconButton(
                         onClick = {
-                            viewModel.sendSocialAgentPrompt(promptInput)
-                            promptInput = ""
+                            if (promptInput.isNotBlank()) {
+                                viewModel.sendSocialAgentPrompt(promptInput)
+                                promptInput = ""
+                            }
                         },
-                        enabled = !isBusy,
+                        enabled = !isBusy && promptInput.isNotBlank(),
                         modifier = Modifier
                             .size(48.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
+                            .background(
+                                if (!isBusy && promptInput.isNotBlank()) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            )
                             .testTag("social_agent_send_btn")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Enviar a IA",
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = if (!isBusy && promptInput.isNotBlank()) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -850,7 +1087,7 @@ fun SocialAgentModal(
 }
 
 // ============================================================================
-// 4. SETTINGS MODAL (OPENED VIA GEAR ICON ⚙️ IN MAIN PROFILE SCREEN)
+// 4. SETTINGS MODAL (PERSISTED VIA DATASTORE)
 // ============================================================================
 @Composable
 fun World1SettingsModal(
@@ -875,7 +1112,6 @@ fun World1SettingsModal(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Ajustes Generales ⚙️", fontWeight = FontWeight.Black)
-                // AI Agent Button inside Settings as requested!
                 IconButton(
                     onClick = {
                         onDismiss()
@@ -902,7 +1138,6 @@ fun World1SettingsModal(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 1. Light / Dark Mode Toggle
                 Text("Apariencia Red Social:", fontWeight = FontWeight.Bold)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -934,7 +1169,6 @@ fun World1SettingsModal(
 
                 HorizontalDivider()
 
-                // 2. Default Currency for Outing Budgets
                 Text("Moneda por defecto para Presupuestos:", fontWeight = FontWeight.Bold)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -943,7 +1177,7 @@ fun World1SettingsModal(
                     currencies.forEach { curr ->
                         val isSel = currency == curr
                         Surface(
-                            onClick = { viewModel.defaultCurrency.value = curr },
+                            onClick = { viewModel.updateDefaultCurrency(curr) },
                             shape = RoundedCornerShape(12.dp),
                             color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -958,7 +1192,6 @@ fun World1SettingsModal(
 
                 HorizontalDivider()
 
-                // 3. Notifications & Sounds
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -967,7 +1200,7 @@ fun World1SettingsModal(
                     Text("Avisos de nuevas salidas y chat", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Switch(
                         checked = notifications,
-                        onCheckedChange = { viewModel.notificationsEnabled.value = it }
+                        onCheckedChange = { viewModel.setNotificationsEnabled(it) }
                     )
                 }
 
@@ -979,20 +1212,18 @@ fun World1SettingsModal(
                     Text("Efectos de sonido en Mini-Juegos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Switch(
                         checked = sounds,
-                        onCheckedChange = { viewModel.soundEffectsEnabled.value = it }
+                        onCheckedChange = { viewModel.setSoundEffectsEnabled(it) }
                     )
                 }
 
                 HorizontalDivider()
 
-                // 4. Cloud Status
                 Text(
                     text = if (isLoggedIn) "☁️ Cuenta Google: $email" else "☁️ Cuenta Google: No conectada",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
 
-                // 5. Quick Portal to World 2
                 OutlinedButton(
                     onClick = {
                         onDismiss()

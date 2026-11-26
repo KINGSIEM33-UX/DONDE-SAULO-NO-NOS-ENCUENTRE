@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Check
@@ -184,117 +185,123 @@ fun MainAppScreen(viewModel: MainViewModel) {
     val loginState by viewModel.isUserLoggedIn.collectAsState()
     val emailState by viewModel.userEmail.collectAsState()
 
-    var activeTab by remember { mutableStateOf("calendar") } // "calendar", "library", "chat", "trivia", "settings"
+    val activeTab by viewModel.world2ActiveTab.collectAsState()
+    val preferredBibleVersion by viewModel.bibleVersion.collectAsState()
 
     var currentBibleId by remember { mutableStateOf<String?>(null) }
     var currentChapterId by remember { mutableStateOf<String?>(null) }
 
     BackHandler {
-        if (activeTab == "bible_reader" || activeTab == "bible_index" || activeTab == "favorites") {
-            activeTab = "library"
-        } else {
-            viewModel.switchToWorld1Social()
+        when {
+            selectedSection != null -> viewModel.selectSection(null)
+            activeTab == "bible_reader" || activeTab == "bible_index" || activeTab == "favorites" -> {
+                viewModel.setWorld2ActiveTab("library")
+            }
+            else -> viewModel.switchToWorld1Social()
         }
     }
 
+    val isDarkWorld2 = themeModeState == ThemeMode.SOCIAL_OSCURO || themeModeState == ThemeMode.VIGILIA
+    val hasOwnTopBar = activeTab == "bible_reader" || activeTab == "bible_index"
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isWideScreen = maxWidth > 600.dp
-        
+
         Scaffold(
             topBar = {
-                val searchQuery by viewModel.searchTerm.collectAsState()
-                Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    color = Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                if (!hasOwnTopBar) {
+                    val searchQuery by viewModel.searchTerm.collectAsState()
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = Color.Transparent
                     ) {
-                        // Portal back to World 1 (Salidas)
-                        Surface(
-                            onClick = { viewModel.switchToWorld1Social() },
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.testTag("switch_to_world1_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            // Portal back to World 1 (Salidas)
+                            Surface(
+                                onClick = { viewModel.switchToWorld1Social() },
+                                shape = RoundedCornerShape(20.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.testTag("switch_to_world1_button")
                             ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Volver al Mundo 1 de Salidas",
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    "Salidas",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Volver al Mundo 1 de Salidas",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        "Salidas",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
                             }
-                        }
 
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { 
-                                viewModel.setQuery(it)
-                                if (it.isNotEmpty() && activeTab != "library") {
-                                    activeTab = "library"
-                                }
-                                if (it.isNotEmpty() && selectedSection != null) {
-                                    viewModel.selectSection(null) // Exit reader to show search results
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
-                            placeholder = { Text("Buscar versículos...", fontSize = 13.sp) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp)
-                                .testTag("global_search_input"),
-                            shape = RoundedCornerShape(24.dp),
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = MaterialTheme.colorScheme.outline,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                                focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = {
+                                    viewModel.setQuery(it)
+                                    if (it.isNotEmpty() && activeTab != "library") {
+                                        viewModel.setWorld2ActiveTab("library")
+                                    }
+                                    if (it.isNotEmpty() && selectedSection != null) {
+                                        viewModel.selectSection(null)
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
+                                placeholder = { Text("Buscar estudios y versículos...", fontSize = 13.sp) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                                    .testTag("global_search_input"),
+                                shape = RoundedCornerShape(24.dp),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.outline,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                                )
                             )
-                        )
-                        
-                        // Favorites Icon (only visible when in Study/Library screen)
-                        if (activeTab == "library") {
-                            IconButton(onClick = { activeTab = "favorites" }) {
+
+                            if (activeTab == "library") {
+                                IconButton(onClick = { viewModel.setWorld2ActiveTab("favorites") }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Favorite,
+                                        contentDescription = "Mis Favoritos",
+                                        tint = Color.Red,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            } else if (activeTab == "favorites") {
+                                IconButton(onClick = { viewModel.setWorld2ActiveTab("library") }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Favorite,
+                                        contentDescription = "Volver a Estudio",
+                                        tint = Color.Red,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+                            }
+
+                            IconButton(onClick = { viewModel.setWorld2ActiveTab("chat") }) {
                                 Icon(
-                                    imageVector = Icons.Default.Favorite,
-                                    contentDescription = "Mis Favoritos",
-                                    tint = Color.Red,
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "Adora IA",
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(26.dp)
                                 )
                             }
-                        } else if (activeTab == "favorites") {
-                            IconButton(onClick = { activeTab = "library" }) {
-                                Icon(
-                                    imageVector = Icons.Default.Favorite,
-                                    contentDescription = "Mis Favoritos",
-                                    tint = Color.Red,
-                                    modifier = Modifier.size(26.dp)
-                                )
-                            }
-                        }
-                        
-                        // Saulo AI Icon (Global)
-                        IconButton(onClick = { activeTab = "chat" }) {
-                            Icon(
-                                imageVector = Icons.Default.Face,
-                                contentDescription = "Asistente AI",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(26.dp)
-                            )
                         }
                     }
                 }
@@ -303,12 +310,13 @@ fun MainAppScreen(viewModel: MainViewModel) {
                 if (!isWideScreen) {
                     TabBottomBar(
                         activeTab = activeTab,
-                        onTabSelected = { activeTab = it }
+                        onTabSelected = { viewModel.setWorld2ActiveTab(it) }
                     )
                 }
             },
             contentWindowInsets = WindowInsets.safeDrawing
         ) { innerPadding ->
+            val bgColor = MaterialTheme.colorScheme.background
             Row(
                 modifier = Modifier
                     .fillMaxSize()
@@ -317,56 +325,59 @@ fun MainAppScreen(viewModel: MainViewModel) {
                 if (isWideScreen) {
                     TabNavigationRail(
                         activeTab = activeTab,
-                        onTabSelected = { activeTab = it }
+                        onTabSelected = { viewModel.setWorld2ActiveTab(it) }
                     )
                     Spacer(modifier = Modifier.width(1.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)))
                 }
 
-                // Main screen container
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .drawBehind {
-                            // Logo background gradient (Blue to Mint)
-                            drawRect(
-                                brush = Brush.linearGradient(
-                                    colors = listOf(Color(0xFF67B8D6), Color(0xFF7EE1B7)),
-                                    start = Offset(0f, 0f),
-                                    end = Offset(size.width, size.height)
+                            if (isDarkWorld2) {
+                                drawRect(color = bgColor)
+                            } else {
+                                drawRect(
+                                    brush = Brush.linearGradient(
+                                        colors = listOf(Color(0xFF67B8D6), Color(0xFF7EE1B7)),
+                                        start = Offset(0f, 0f),
+                                        end = Offset(size.width, size.height)
+                                    )
                                 )
-                            )
+                            }
                         }
                 ) {
                     when (activeTab) {
-                        "calendar" -> CalendarScreen()
+                        "calendar" -> CalendarScreen(viewModel = viewModel)
                         "library" -> LibraryScreen(
                             sections = sections,
                             selectedSection = selectedSection,
                             viewModel = viewModel,
                             textSize = textSizeState,
                             textPadding = textPaddingState,
-                            onNavigateToBibleReader = { bId, cId -> 
+                            onNavigateToBibleReader = { bId, cId ->
                                 currentBibleId = bId
                                 currentChapterId = cId
-                                activeTab = "bible_reader"
+                                viewModel.setWorld2ActiveTab("bible_reader")
                             },
                             onNavigateToBibleIndex = {
-                                activeTab = "bible_index"
+                                viewModel.setWorld2ActiveTab("bible_index")
                             }
                         )
                         "bible_reader" -> BibleReaderScreen(
                             bibleId = currentBibleId,
                             chapterId = currentChapterId,
                             viewModel = viewModel,
-                            onBack = { activeTab = "library" }
+                            onBack = { viewModel.setWorld2ActiveTab("library") }
                         )
                         "bible_index" -> BibleIndexScreen(
-                            onBack = { activeTab = "library" },
-                            onChapterSelected = { bId, bkId, cId ->
+                            preferredVersion = preferredBibleVersion,
+                            onBack = { viewModel.setWorld2ActiveTab("library") },
+                            onChapterSelected = { bId, _, cId ->
                                 currentBibleId = bId
                                 currentChapterId = cId
-                                activeTab = "bible_reader"
+                                viewModel.setWorld2ActiveTab("bible_reader")
                             }
                         )
                         "favorites" -> FavoritesScreen(viewModel = viewModel)
@@ -767,7 +778,15 @@ fun LibraryScreen(
                 }
             }
 
-            // Spiritual Journey Progress Tracker
+            val allSections by viewModel.allSectionsUnfiltered.collectAsStateWithLifecycle()
+            val favoriteVerses by viewModel.favoriteVerses.collectAsStateWithLifecycle()
+            val readSectionsCount = allSections.count { it.isRead }
+            val totalSectionsCount = allSections.size.coerceAtLeast(1)
+            val studyPercent = ((readSectionsCount * 100f) / totalSectionsCount).coerceIn(0f, 100f)
+            val recentUniqueChapters = recentChapters.distinctBy { it.chapterId }.size
+            val lastRecent = recentChapters.firstOrNull()
+
+            // Spiritual Journey Progress Tracker (Real Room Stats)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -784,16 +803,13 @@ fun LibraryScreen(
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
-                    
-                    val stats = listOf(
-                        "Progreso de lectura" to 15f,
-                        "Capítulos leídos" to 42f,
-                        "Libros leídos completamente" to 3f
-                    )
-                    stats.forEach { (statName, valAmount) ->
-                        val progress = valAmount / 100f
-                        val displayValue = if (statName == "Progreso de lectura") "${valAmount.toInt()}%" else valAmount.toInt().toString()
 
+                    val stats = listOf(
+                        Triple("Estudios completados", studyPercent / 100f, "$readSectionsCount/$totalSectionsCount (${studyPercent.toInt()}%)"),
+                        Triple("Capítulos explorados", (recentUniqueChapters / 20f).coerceIn(0f, 1f), "$recentUniqueChapters"),
+                        Triple("Versículos favoritos", (favoriteVerses.size / 15f).coerceIn(0f, 1f), "${favoriteVerses.size}")
+                    )
+                    stats.forEach { (statName, progress, displayValue) ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -804,7 +820,7 @@ fun LibraryScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(0.45f)
+                                modifier = Modifier.weight(0.42f)
                             )
                             LinearProgressIndicator(
                                 progress = { progress },
@@ -818,8 +834,8 @@ fun LibraryScreen(
                             Text(
                                 text = displayValue,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                modifier = Modifier.weight(0.2f),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                                modifier = Modifier.weight(0.23f),
                                 textAlign = TextAlign.End
                             )
                         }
@@ -827,12 +843,7 @@ fun LibraryScreen(
                 }
             }
 
-            // Removed duplicated search field since it is now in TopAppBar
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Bible Dashboard Flotante
+            // Bible Dashboard Flotante (Real last-read chapter)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -855,16 +866,22 @@ fun LibraryScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Button(
-                            onClick = { onNavigateToBibleReader(null, null) },
+                            onClick = {
+                                onNavigateToBibleReader(lastRecent?.bibleId, lastRecent?.chapterId)
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                             shape = RoundedCornerShape(16.dp)
                         ) {
-                            Text("Leer")
+                            Text(if (lastRecent != null) "Continuar" else "Leer")
                         }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Último capítulo donde te quedaste: Juan 3",
+                        text = if (lastRecent != null) {
+                            "Último capítulo donde te quedaste: ${lastRecent.reference}"
+                        } else {
+                            "Empieza tu lectura hoy en Juan 3 o abre el índice completo"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                     )
@@ -884,14 +901,76 @@ fun LibraryScreen(
             ) {
                 Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Índice de la Biblia", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Text("Índice Completo de la Biblia (66 libros)", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
-            
+
+            // Curated Study Sections + Category Filter + Live Global Search Results
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = if (searchQuery.isBlank()) "Estudios Guiados y Devocionales" else "Resultados para \"$searchQuery\" (${sections.size})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            val categories = listOf("Todos", "Tabernáculo", "Sacerdotes", "Devocional")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            ) {
+                categories.forEach { cat ->
+                    val isSelected = activeCategory.equals(cat, ignoreCase = true)
+                    Surface(
+                        onClick = { viewModel.selectCategory(cat) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                        contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(
+                            text = cat,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            if (sections.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "No se encontraron estudios locales para \"$searchQuery\".",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Button(onClick = { onNavigateToBibleReader(null, null) }) {
+                            Text("Abrir Lector Bíblico para buscar en toda la Biblia")
+                        }
+                    }
+                }
+            } else {
+                sections.forEach { sec ->
+                    BibleSectionCard(
+                        item = sec,
+                        onClick = { viewModel.selectSection(sec) },
+                        viewModel = viewModel
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+            }
+
             // Recientes Section
             if (recentChapters.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Recientes",
+                    text = "Capítulos Recientes",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -903,7 +982,7 @@ fun LibraryScreen(
                             .fillMaxWidth()
                             .padding(bottom = 8.dp)
                             .clickable { onNavigateToBibleReader(recent.bibleId, recent.chapterId) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -1662,26 +1741,33 @@ fun GeminiChatScreen(viewModel: MainViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .drawBehind {
-                    drawRect(
-                        brush = Brush.linearGradient(
-                            colors = listOf(Color(0xFF67B8D6), Color(0xFF7EE1B7)),
-                            start = Offset(0f, 0f),
-                            end = Offset(size.width, size.height)
-                        )
-                    )
-                }
+                .background(MaterialTheme.colorScheme.primaryContainer)
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Placeholder para el Logo futuro
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Icon(
-                    imageVector = Icons.Default.Face,
-                    contentDescription = "Logo",
-                    tint = Color.White,
-                    modifier = Modifier.size(64.dp)
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "Adora IA",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
                 )
+                Column {
+                    Text(
+                        text = "Adora IA • Estudio Bíblico",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Black,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Preguntas, pasajes, agenda y explicaciones con Gemini",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                    )
+                }
             }
         }
 
@@ -1727,7 +1813,7 @@ fun GeminiChatScreen(viewModel: MainViewModel) {
                     ) {
                         Column {
                             Text(
-                                text = if (isAi) "ASISTENTE AI" else "TÚ",
+                                text = if (isAi) "ADORA IA" else "TÚ",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 10.sp,
                                 color = if (isAi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
@@ -1757,7 +1843,7 @@ fun GeminiChatScreen(viewModel: MainViewModel) {
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Saulo está sopesando teológicamente tu pregunta...",
+                            text = "Adora IA está preparando tu respuesta...",
                             fontStyle = FontStyle.Italic,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
@@ -2131,7 +2217,9 @@ fun SettingsScreen(
     userLoggedIn: Boolean,
     userEmail: String
 ) {
-    var emailInput by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
     val analyticsEnabled by viewModel.analyticsEnabled.collectAsStateWithLifecycle()
 
     LazyColumn(
@@ -2189,7 +2277,7 @@ fun SettingsScreen(
                                     .clip(RoundedCornerShape(24.dp))
                                     .background(
                                         if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-                                      )
+                                    )
                                     .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
                                     .clickable { viewModel.updateThemeMode(mode) },
                                 contentAlignment = Alignment.Center
@@ -2213,7 +2301,7 @@ fun SettingsScreen(
             }
         }
 
-        // Font resizer
+        // Font & Padding resizers
         item {
             Card(
                 modifier = Modifier
@@ -2251,15 +2339,45 @@ fun SettingsScreen(
                             activeTrackColor = MaterialTheme.colorScheme.primary
                         )
                     )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Márgenes del Lector",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "${textPadding.toInt()} dp",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Slider(
+                        value = textPadding,
+                        onValueChange = { viewModel.updateTextPadding(it) },
+                        valueRange = 8f..32f,
+                        steps = 5,
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "«Lámpara es a mis pies tu palabra...»",
                         fontSize = textSize.sp,
                         fontFamily = FontFamily.Serif,
                         fontStyle = FontStyle.Italic,
                         color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = (textPadding / 2f).dp),
                         textAlign = TextAlign.Center
                     )
                 }
@@ -2283,7 +2401,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    
+
                     val currentVersion by viewModel.bibleVersion.collectAsStateWithLifecycle()
                     var expanded by remember { mutableStateOf(false) }
 
@@ -2299,7 +2417,7 @@ fun SettingsScreen(
                                 containerColor = MaterialTheme.colorScheme.surface,
                                 contentColor = MaterialTheme.colorScheme.onSurface
                             ),
-                            border = null // Controlled by the Modifier.border
+                            border = null
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2326,7 +2444,7 @@ fun SettingsScreen(
                                 .background(MaterialTheme.colorScheme.surface)
                                 .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
                         ) {
-                            listOf("RVR1960", "NTV", "NVI", "TLA").forEach { v ->
+                            listOf("RVR1960", "NTV", "NVI", "LBLA", "DHH").forEach { v ->
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text(v, fontWeight = FontWeight.Bold) },
                                     onClick = {
@@ -2358,7 +2476,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Resguarda tus notas, suertes diarias, XP acumulados y marcas de lectura.",
+                        text = "Resguarda tu perfil, grupo de salidas y preferencias en la nube.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -2371,7 +2489,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = if (analyticsEnabled) "Rendimiento y Métricas: Activo" else "Modo de Privacidad: Activa",
+                            text = if (analyticsEnabled) "Rendimiento y Métricas: Activo" else "Modo de Privacidad: Activo",
                             fontWeight = FontWeight.Bold,
                             color = if (analyticsEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                             fontSize = 13.sp
@@ -2399,23 +2517,28 @@ fun SettingsScreen(
                                 Text("Sincronizar Cloud")
                             }
                             OutlinedButton(
-                                onClick = { viewModel.handleLogout() },
+                                onClick = {
+                                    signOutWithCredentialManager(
+                                        credentialManager = credentialManager,
+                                        onSignOutComplete = { viewModel.handleLogout() },
+                                        scope = coroutineScope
+                                    )
+                                },
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text("Desconectar")
                             }
                         }
                     } else {
-                        val context = LocalContext.current
-                        val coroutineScope = rememberCoroutineScope()
-                        val credentialManager = remember(context) { CredentialManager.create(context) }
                         Button(
                             onClick = {
                                 onGoogleSignInClicked(
                                     context = context,
                                     credentialManager = credentialManager,
                                     onAuthSuccess = { viewModel.handleSyncWithFirebase() },
-                                    onAuthError = { /* Error handled via AuthHelper */ },
+                                    onAuthError = { err ->
+                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
+                                    },
                                     scope = coroutineScope
                                 )
                             },
@@ -2428,55 +2551,11 @@ fun SettingsScreen(
             }
         }
 
-        // Original physical engine technical summary as extracted from APK
-        item {
-            var showBitacora by remember { mutableStateOf(false) }
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "*inspección técnica del APK*",
-                    fontSize = 8.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                    modifier = Modifier.clickable { showBitacora = !showBitacora }
-                )
-                if (showBitacora) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.4f)),
-                        border = BoxBorder()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Bitácora de Inspección Técnica APK",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "• Core: Jetpack Compose (Migración de React Native / Expo v1.0.1)\n" +
-                                       "• Engine de Rendimiento: Baseline Profiles pre-compilado en subprocesos ART\n" +
-                                       "• Persistencia Core: SQLite Room local reactivo (Dao / Repositorio hilos de fondo)\n" +
-                                       "• Inteligencia: API REST gemini-3.1-pro-preview (Thinking HIGH habilitado)\n" +
-                                       "• Integraciones externas: Intents de Calendarios de Android / Share interactivo\n" +
-                                       "• Soporte multiidioma operativo preconfigurado en las suites locales.",
-                                fontSize = 11.sp,
-                                lineHeight = 16.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         item {
             Spacer(modifier = Modifier.height(80.dp))
         }
     }
 }
-
-@Composable
-fun BoxBorder(): androidx.compose.foundation.BorderStroke? = null
 
 @Composable
 fun FavoritesScreen(viewModel: MainViewModel) {

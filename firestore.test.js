@@ -124,3 +124,43 @@ test("Shadow update test: rejects ghost field injection on outings", async () =>
     })
   );
 });
+
+test("Multi-user group: member can read and update shared group outing", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const now = new Date();
+
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("GRUPO-2026").set({
+      name: "Grupo Test",
+      inviteCode: "GRUPO-2026",
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID],
+      memberNames: { [ALICE_UID]: "Alice" },
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Bob joins the group using the invite code
+  await assertSucceeds(
+    bobDb.collection("groups").doc("GRUPO-2026").update({
+      memberIds: [ALICE_UID, BOB_UID],
+      memberNames: { [ALICE_UID]: "Alice", [BOB_UID]: "Bob" },
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb
+      .collection("outings")
+      .doc("shared_outing_1")
+      .set(validOutingPayload(ALICE_UID, now))
+  );
+
+  // Bob can now read the shared group outing
+  await assertSucceeds(
+    bobDb.collection("outings").doc("shared_outing_1").get()
+  );
+});
+

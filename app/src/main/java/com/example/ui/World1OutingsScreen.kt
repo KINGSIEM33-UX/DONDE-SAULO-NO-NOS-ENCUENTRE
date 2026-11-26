@@ -96,13 +96,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     val stories by viewModel.stories.collectAsState()
     val defaultCurrency by viewModel.defaultCurrency.collectAsState()
 
-    // Defaults to November 2026 so Tuesday Nov 10 (Martes 10 de noviembre) is immediately visible with its double green circle!
-    var displayedYear by remember { mutableIntStateOf(2026) }
-    var displayedMonthZeroIndexed by remember { mutableIntStateOf(10) } // 10 = Noviembre
+    val todayCal = remember { Calendar.getInstance() }
+    val todayIso = remember { com.example.data.todayIsoDate() }
+    var displayedYear by remember { mutableIntStateOf(todayCal.get(Calendar.YEAR)) }
+    var displayedMonthZeroIndexed by remember { mutableIntStateOf(todayCal.get(Calendar.MONTH)) }
 
     var showOutingFormDialog by remember { mutableStateOf(false) }
     var editingOuting by remember { mutableStateOf<Outing?>(null) }
-    var preselectedDateIso by remember { mutableStateOf("2026-11-10") }
+    var preselectedDateIso by remember { mutableStateOf(todayIso) }
 
     var activeDetailOuting by remember { mutableStateOf<Outing?>(null) }
 
@@ -112,8 +113,12 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
             .groupBy { it.dateIso.removePrefix(prefix).toIntOrNull() ?: -1 }
     }
 
-    val upcomingOutings = remember(outings) {
-        outings.filter { it.dateIso >= "2026-01-01" }.sortedBy { it.dateIso + " " + it.time }
+    val upcomingOutings = remember(outings, todayIso) {
+        outings.filter { it.dateIso >= todayIso }.sortedBy { it.dateIso + " " + it.time }
+    }
+
+    val totalAlbumPhotos = remember(outings, stories) {
+        outings.sumOf { it.albumPhotos.size } + stories.size
     }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -191,7 +196,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Text(
-                                    text = "Álbum (${stories.size})",
+                                    text = "Álbum ($totalAlbumPhotos)",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -330,6 +335,8 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                         CalendarDayCell(
                                             dayNumber = dayNumber,
                                             outing = primaryOuting,
+                                            outingsCount = dayOutings.size,
+                                            isToday = dateIso == todayIso,
                                             modifier = Modifier.weight(1f),
                                             onClick = {
                                                 if (primaryOuting != null) {
@@ -423,7 +430,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
         FloatingActionButton(
             onClick = {
                 editingOuting = null
-                preselectedDateIso = "%04d-%02d-10".format(displayedYear, displayedMonthZeroIndexed + 1)
+                preselectedDateIso = todayIso
                 showOutingFormDialog = true
             },
             shape = RoundedCornerShape(16.dp),
@@ -501,6 +508,8 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
 private fun CalendarDayCell(
     dayNumber: Int,
     outing: Outing?,
+    outingsCount: Int = 0,
+    isToday: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
@@ -515,7 +524,6 @@ private fun CalendarDayCell(
     ) {
         when (status) {
             OutingStatus.CONFIRMED -> {
-                // GREEN CIRCLE INSIDE A GREEN CIRCLE (Doble circulito verde)
                 Box(
                     modifier = Modifier
                         .size(42.dp)
@@ -534,7 +542,6 @@ private fun CalendarDayCell(
                 }
             }
             OutingStatus.PLANNED -> {
-                // GRAY CIRCLE (Pensada / Por confirmar)
                 Box(
                     modifier = Modifier
                         .size(38.dp)
@@ -553,7 +560,6 @@ private fun CalendarDayCell(
                 }
             }
             OutingStatus.CANCELLED -> {
-                // RED CIRCLE (Cancelada)
                 Box(
                     modifier = Modifier
                         .size(38.dp)
@@ -572,11 +578,38 @@ private fun CalendarDayCell(
                 }
             }
             null -> {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .then(
+                            if (isToday) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                            else Modifier
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = dayNumber.toString(),
+                        color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        fontWeight = if (isToday) FontWeight.ExtraBold else FontWeight.Medium,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        }
+        if (outingsCount > 1) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 2.dp, end = 2.dp)
+            ) {
                 Text(
-                    text = dayNumber.toString(),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp
+                    text = "+${outingsCount - 1}",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
             }
         }
@@ -1072,26 +1105,50 @@ fun OutingFormDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                val pickerContext = androidx.compose.ui.platform.LocalContext.current
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = time,
-                        onValueChange = { time = it },
-                        label = { Text("Hora") },
-                        placeholder = { Text("20:30") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = dateIso,
-                        onValueChange = { dateIso = it },
-                        label = { Text("Fecha (Auto)") },
-                        placeholder = { Text("2026-11-10") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1.3f)
-                    )
+                    OutlinedButton(
+                        onClick = {
+                            val parts = time.split(":")
+                            val initH = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 20
+                            val initM = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
+                            android.app.TimePickerDialog(
+                                pickerContext,
+                                { _, h, m -> time = "%02d:%02d".format(h, m) },
+                                initH,
+                                initM,
+                                true
+                            ).show()
+                        },
+                        modifier = Modifier.weight(1f).height(54.dp)
+                    ) {
+                        Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(time.ifBlank { "20:00" }, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val parts = dateIso.split("-")
+                            val cal = Calendar.getInstance()
+                            val initY = parts.getOrNull(0)?.toIntOrNull() ?: cal.get(Calendar.YEAR)
+                            val initM = (parts.getOrNull(1)?.toIntOrNull() ?: (cal.get(Calendar.MONTH) + 1)) - 1
+                            val initD = parts.getOrNull(2)?.toIntOrNull() ?: cal.get(Calendar.DAY_OF_MONTH)
+                            android.app.DatePickerDialog(
+                                pickerContext,
+                                { _, y, m, d -> dateIso = "%04d-%02d-%02d".format(y, m + 1, d) },
+                                initY,
+                                initM.coerceIn(0, 11),
+                                initD.coerceIn(1, 31)
+                            ).show()
+                        },
+                        modifier = Modifier.weight(1.35f).height(54.dp)
+                    ) {
+                        Text("📅 ${dateIso.ifBlank { defaultDateIso }}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
