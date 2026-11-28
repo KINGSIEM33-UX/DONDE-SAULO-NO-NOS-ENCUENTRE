@@ -80,12 +80,18 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
@@ -782,6 +788,18 @@ fun HoldToConfirmButton(
     val fillProgress = remember { Animatable(0f) }
     var isHolding by remember { mutableStateOf(false) }
     var isDone by remember { mutableStateOf(false) }
+    var isAccessibleArmed by remember { mutableStateOf(false) }
+    var accessibleArmResetJob by remember { mutableStateOf<Job?>(null) }
+    val completeHold = {
+        if (!isDone) {
+            isDone = true
+            isHolding = false
+            isAccessibleArmed = false
+            accessibleArmResetJob?.cancel()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onHoldComplete()
+        }
+    }
 
     val pressScale by animateFloatAsState(
         targetValue = if (isHolding) 0.97f else 1f,
@@ -813,6 +831,36 @@ fun HoldToConfirmButton(
             .clip(shape)
             .background(backgroundColor)
             .border(1.dp, fillColor.copy(alpha = 0.42f), shape)
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                stateDescription = when {
+                    isDone -> doneLabel
+                    isAccessibleArmed -> "Listo para confirmar; pulsa de nuevo para confirmar la acción."
+                    else -> "Mantén pulsado para confirmar o pulsa dos veces: primero para preparar y después para confirmar."
+                }
+                onClick(
+                    label = when {
+                        isDone -> doneLabel
+                        isAccessibleArmed -> "Confirmar acción"
+                        else -> "Preparar confirmación"
+                    }
+                ) {
+                    if (isDone) {
+                        false
+                    } else if (isAccessibleArmed) {
+                        completeHold()
+                        true
+                    } else {
+                        isAccessibleArmed = true
+                        accessibleArmResetJob?.cancel()
+                        accessibleArmResetJob = scope.launch {
+                            delay(4_000L)
+                            isAccessibleArmed = false
+                        }
+                        true
+                    }
+                }
+            }
             .pointerInput(isDone, holdTimeMs) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -825,10 +873,7 @@ fun HoldToConfirmButton(
                             animationSpec = tween(durationMillis = remaining, easing = LinearEasing)
                         )
                         if (fillProgress.value >= 0.995f && !isDone) {
-                            isDone = true
-                            isHolding = false
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onHoldComplete()
+                            completeHold()
                         }
                     }
                     waitForUpOrCancellation()
