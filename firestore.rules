@@ -68,6 +68,16 @@ service cloud.firestore {
       );
     }
 
+    // Group content belongs to the current parent generation only when its client-supplied
+    // timestamp is not older than the current group. This is a lifecycle boundary, not a
+    // trusted creation clock: Rules cannot prove when a client generated a timestamp.
+    function isCurrentGroupContent(data) {
+      return data.groupId is string &&
+             exists(/databases/$(database)/documents/groups/$(data.groupId)) &&
+             data.createdAt is timestamp &&
+             data.createdAt >= get(/databases/$(database)/documents/groups/$(data.groupId)).data.createdAt;
+    }
+
     function isGroupOwner(groupId) {
       return isSignedIn() && isValidId(groupId) && (
         (hasV2MemberDoc(groupId, request.auth.uid) && v2MemberRole(groupId, request.auth.uid) == 'OWNER') ||
@@ -458,19 +468,24 @@ service cloud.firestore {
 
     match /outings/{outingId} {
       allow get: if isSignedIn() && isValidId(outingId) &&
-                    (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId));
+                    (existing().ownerId == request.auth.uid ||
+                     (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
       allow list: if isSignedIn() &&
-                     (resource.data.ownerId == request.auth.uid || isGroupMember(resource.data.groupId));
+                     (resource.data.ownerId == request.auth.uid ||
+                      (isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
-                       incoming().ownerId == request.auth.uid;
+                       incoming().ownerId == request.auth.uid &&
+                       (!exists(/databases/$(database)/documents/groups/$(incoming().groupId)) ||
+                        (isCurrentGroupContent(incoming()) && isGroupMember(incoming().groupId)));
 
       allow update: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
                        (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId)) &&
+                       (existing().ownerId == request.auth.uid || isCurrentGroupContent(existing())) &&
                        incoming().ownerId == existing().ownerId &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
@@ -513,14 +528,18 @@ service cloud.firestore {
 
     match /chat_messages/{messageId} {
       allow get: if isSignedIn() && isValidId(messageId) &&
-                    (existing().senderId == request.auth.uid || isGroupMember(existing().groupId));
+                    (existing().senderId == request.auth.uid ||
+                     (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
       allow list: if isSignedIn() &&
-                     (resource.data.senderId == request.auth.uid || isGroupMember(resource.data.groupId));
+                     (resource.data.senderId == request.auth.uid ||
+                      (isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
-                       incoming().senderId == request.auth.uid;
+                       incoming().senderId == request.auth.uid &&
+                       isCurrentGroupContent(incoming()) &&
+                       isGroupMember(incoming().groupId);
 
       allow update: if isSignedIn() &&
                        isValidId(messageId) &&
@@ -530,7 +549,7 @@ service cloud.firestore {
                        (
                          (existing().senderId == request.auth.uid &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'transcription', 'reactions', 'updatedAt'])) ||
-                         (isGroupMember(existing().groupId) &&
+                         (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']))
                        );
 
@@ -561,14 +580,18 @@ service cloud.firestore {
 
     match /stories/{storyId} {
       allow get: if isSignedIn() && isValidId(storyId) &&
-                    (existing().authorId == request.auth.uid || ('groupId' in existing() && isGroupMember(existing().groupId)));
+                    (existing().authorId == request.auth.uid ||
+                     ('groupId' in existing() && isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
       allow list: if isSignedIn() &&
-                     (resource.data.authorId == request.auth.uid || ('groupId' in resource.data && isGroupMember(resource.data.groupId)));
+                     (resource.data.authorId == request.auth.uid ||
+                      ('groupId' in resource.data && isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&
                        isValidStory(incoming()) &&
-                       incoming().authorId == request.auth.uid;
+                       incoming().authorId == request.auth.uid &&
+                       (!('groupId' in incoming()) ||
+                        (isCurrentGroupContent(incoming()) && isGroupMember(incoming().groupId)));
 
       allow update: if isSignedIn() &&
                        isValidId(storyId) &&
@@ -578,7 +601,7 @@ service cloud.firestore {
                        (
                          (existing().authorId == request.auth.uid &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'likesCount', 'updatedAt'])) ||
-                         ('groupId' in existing() && isGroupMember(existing().groupId) &&
+                         ('groupId' in existing() && isCurrentGroupContent(existing()) && isGroupMember(existing().groupId) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']))
                        );
 

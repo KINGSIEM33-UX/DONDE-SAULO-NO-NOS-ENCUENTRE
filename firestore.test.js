@@ -502,6 +502,9 @@ test("ALTO-4: group delete is denied and stale members/invites cannot cross a sa
     await db.collection("outings").doc("stale_group_outing").set(
       validOutingPayload(ALICE_UID, HIGH_ENTROPY_GROUP_ID, oldCreatedAt)
     );
+    await db.collection("outings").doc("stale_third_party_outing").set(
+      validOutingPayload(BOB_UID, HIGH_ENTROPY_GROUP_ID, oldCreatedAt)
+    );
   });
 
   // Recreating the same ID with a fresh creation timestamp is a normal route for the new owner.
@@ -509,7 +512,13 @@ test("ALTO-4: group delete is denied and stale members/invites cannot cross a sa
 
   // The old OWNER is not a member/owner of the new generation, despite the parent existing.
   await assertFails(oldAliceDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).get());
-  await assertFails(oldAliceDb.collection("outings").doc("stale_group_outing").get());
+  // Owner-scoped access is intentionally independent of current group membership: Alice may
+  // still read her own historical document, but not another user's historical document.
+  const oldAliceOuting = await assertSucceeds(
+    oldAliceDb.collection("outings").doc("stale_group_outing").get()
+  );
+  assert.equal(oldAliceOuting.data().ownerId, ALICE_UID);
+  await assertFails(oldAliceDb.collection("outings").doc("stale_third_party_outing").get());
   await assertFails(
     oldAliceDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).collection("members").doc(ALICE_UID).get()
   );
@@ -536,6 +545,22 @@ test("ALTO-4: group delete is denied and stale members/invites cannot cross a sa
   // Client deletion is fail-closed, so no new orphan set can be created through Rules.
   await assertFails(newOwnerDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).delete());
 
+  // New-generation members cannot read old group content, even when they know its document ID.
+  await assertFails(freshBobDb.collection("outings").doc("stale_group_outing").get());
+  await assertFails(freshBobDb.collection("outings").doc("stale_third_party_outing").get());
+
+  // A client cannot create new group content with a forged pre-generation timestamp.
+  await assertFails(
+    oldAliceDb.collection("outings").doc("forged_old_generation_outing").set(
+      validOutingPayload(ALICE_UID, HIGH_ENTROPY_GROUP_ID, oldCreatedAt)
+    )
+  );
+  await assertFails(
+    oldAliceDb.collection("outings").doc("unauthorized_new_generation_outing").set(
+      validOutingPayload(ALICE_UID, HIGH_ENTROPY_GROUP_ID, new Date())
+    )
+  );
+
   // Positive normal path remains available for a fresh invite in the recreated group.
   const freshToken = "INV-F9R8E7S6-H5G4R3O2-U1P0N9E8-W7X6Y5Z4";
   await assertSucceeds(createInviteDoc(newOwnerDb, {
@@ -545,6 +570,12 @@ test("ALTO-4: group delete is denied and stale members/invites cannot cross a sa
     maxUses: 1,
   }));
   await assertSucceeds(redeemInviteTransactionally(freshBobDb, freshToken, BOB_UID, "Bob nuevo"));
+  await assertSucceeds(
+    newOwnerDb.collection("outings").doc("fresh_group_outing").set(
+      validOutingPayload(EVE_UID, HIGH_ENTROPY_GROUP_ID, new Date())
+    )
+  );
+  await assertSucceeds(freshBobDb.collection("outings").doc("fresh_group_outing").get());
 });
 
 test("Legacy group (QUEDA-2026): preserves existing members & outings, closes self-join door, supports reversible backfill & v2 invites", async () => {
