@@ -1,0 +1,44 @@
+name: Firestore rules (emulator)
+
+on:
+  push:
+    branches: [main, 'cue/**']
+    paths:
+      - 'firestore.rules'
+      - 'firestore.test.js'
+      - 'firebase.ci.json'
+      - 'package.json'
+      - '.github/workflows/firestore-emulator-ci.yml'
+  pull_request:
+    paths:
+      - 'firestore.rules'
+      - 'firestore.test.js'
+      - 'firebase.ci.json'
+      - 'package.json'
+      - '.github/workflows/firestore-emulator-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firestore-rules:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_PROJECT: demo-adora-firestore-ci
+      GCP_PROJECT: demo-adora-firestore-ci
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8085
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+
+      - name: Install pinned test and emulator CLI dependencies
+        run: npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund
+
+      - name: Run Firestore rules tests in the emulator
+        run: npx --no-install firebase emulators:exec --config firebase.ci.json --project "$FIREBASE_PROJECT" "node --test firestore.test.js"
