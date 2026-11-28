@@ -375,6 +375,7 @@ fun RubberSegmentedBar(
     defaultThumbColor: Color = MaterialTheme.colorScheme.primary,
     defaultActiveTextColor: Color = MaterialTheme.colorScheme.onPrimary,
     idleTextColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    enabled: Boolean = true,
     height: Dp = 40.dp,
     cornerRadius: Dp = 12.dp,
     inset: Dp = 3.dp
@@ -476,6 +477,7 @@ fun RubberSegmentedBar(
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(thumbRadius))
                         .clickable(
+                            enabled = enabled,
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
                         ) {

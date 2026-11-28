@@ -1,7 +1,10 @@
 package com.example.data
 
 import com.google.common.truth.Truth.assertThat
+import com.google.firebase.Timestamp
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.util.Date
 
 class GroupInviteCryptoTest {
 
@@ -101,11 +104,12 @@ class GroupInviteCryptoTest {
 
     @Test
     fun socialGroupV2CreateMap_excludesInviteCodeAndMemberArrays() {
-        val group = SocialGroup(id = "grp_ABC", name = "Equipo Adora")
+        val group = SocialGroup(id = "grp_ABC", name = "Equipo Adora", generationId = "a".repeat(32))
         val map = group.toV2CreateMap("alice_uid")
         assertThat(map["name"]).isEqualTo("Equipo Adora")
         assertThat(map["createdBy"]).isEqualTo("alice_uid")
         assertThat(map["schemaVersion"]).isEqualTo(2L)
+        assertThat(map["generationId"]).isEqualTo("a".repeat(32))
         assertThat(map).doesNotContainKey("inviteCode")
         assertThat(map).doesNotContainKey("memberIds")
         assertThat(map).doesNotContainKey("memberNames")
@@ -113,16 +117,156 @@ class GroupInviteCryptoTest {
 
     @Test
     fun groupMemberCreateMaps_enforceExpectedRolesAndSelfFields() {
-        val ownerMap = GroupMember.toOwnerCreateMap("alice", "grp_1", "Alice")
+        val generationId = "a".repeat(32)
+        val ownerMap = GroupMember.toOwnerCreateMap("alice", "grp_1", "Alice", generationId)
         assertThat(ownerMap["role"]).isEqualTo(GroupRole.OWNER.name)
         assertThat(ownerMap["inviteToken"]).isEqualTo("")
+        assertThat(ownerMap["groupGenerationId"]).isEqualTo(generationId)
 
         val token = GroupInviteCrypto.generateHighEntropyInviteToken()
-        val joinMap = GroupMember.toInviteJoinCreateMap("bob", "grp_1", "Bob", token)
+        val joinMap = GroupMember.toInviteJoinCreateMap("bob", "grp_1", "Bob", token, generationId)
         assertThat(joinMap["role"]).isEqualTo(GroupRole.MEMBER.name)
         assertThat(joinMap["inviteToken"]).isEqualTo(token)
+        assertThat(joinMap["groupGenerationId"]).isEqualTo(generationId)
 
         val selfUpdate = GroupMember.toSelfUpdateMap("Bob Nuevo")
         assertThat(selfUpdate.keys).containsExactly("displayName", "updatedAt")
+    }
+
+    @Test
+    fun v2ModelBuilders_rejectMissingOrMalformedGeneration() {
+        assertThrows(IllegalArgumentException::class.java) {
+            SocialGroup(name = "Equipo Adora").toV2CreateMap("alice")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupMember.toOwnerCreateMap("alice", "grp_1", "Alice", "bad-generation")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupMember.toInviteJoinCreateMap("bob", "grp_1", "Bob", "invite-token", "")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GroupInvite.toCreateMap(
+                token = GroupInviteCrypto.generateHighEntropyInviteToken(),
+                groupId = "grp_1",
+                groupNamePreview = "Equipo",
+                creatorUid = "alice",
+                expiresAt = Timestamp(Date(System.currentTimeMillis() + 60_000L)),
+                maxUses = 1L,
+                groupGenerationId = "not-hex"
+            )
+        }
+    }
+
+    @Test
+    fun outingUpdateMap_preservesGroupGenerationAndOmitsItForPersonalScope() {
+        val generationId = "b".repeat(32)
+        val groupMap = Outing(
+            ownerId = "alice",
+            groupId = "v2_grp_12345678901234567890",
+            groupGenerationId = generationId,
+            title = "Salida"
+        ).toUpdateMap()
+        assertThat(groupMap["groupGenerationId"]).isEqualTo(generationId)
+
+        val personalMap = Outing(ownerId = "alice", title = "Personal").toUpdateMap()
+        assertThat(personalMap["groupId"]).isEqualTo("personal_alice")
+        assertThat(personalMap).doesNotContainKey("groupGenerationId")
+    }
+
+    @Test
+    fun outingCreateMap_startsGroupRsvpEmptyButKeepsPersonalRsvpState() {
+        val groupMap = Outing(
+            ownerId = "alice_123",
+            groupId = "v2_grp_12345678901234567890",
+            groupGenerationId = "a".repeat(32),
+            rsvpYesCount = 6L,
+            rsvpMaybeCount = 2L,
+            rsvpNoCount = 1L,
+            myRsvp = RsvpChoice.YES.name,
+            rsvpByUser = mapOf("alice_123" to RsvpChoice.YES.name)
+        ).toCreateMap("alice_123")
+
+        assertThat(groupMap["rsvpYesCount"]).isEqualTo(0L)
+        assertThat(groupMap["rsvpMaybeCount"]).isEqualTo(0L)
+        assertThat(groupMap["rsvpNoCount"]).isEqualTo(0L)
+        assertThat(groupMap["myRsvp"]).isEqualTo(RsvpChoice.NONE.name)
+        assertThat(groupMap["rsvpByUser"]).isEqualTo(emptyMap<String, String>())
+
+        val personalMap = Outing(
+            ownerId = "alice_123",
+            groupId = "personal_alice_123",
+            rsvpYesCount = 1L,
+            myRsvp = RsvpChoice.YES.name
+        ).toCreateMap("alice_123")
+        assertThat(personalMap["rsvpYesCount"]).isEqualTo(1L)
+        assertThat(personalMap["myRsvp"]).isEqualTo(RsvpChoice.YES.name)
+        assertThat(personalMap["rsvpByUser"]).isEqualTo(mapOf("alice_123" to RsvpChoice.YES.name))
+    }
+
+    @Test
+    fun outingUpdateMap_doesNotWriteSharedGroupRsvpFields() {
+        val groupMap = Outing(
+            ownerId = "alice_123",
+            groupId = "v2_grp_12345678901234567890",
+            groupGenerationId = "b".repeat(32),
+            rsvpYesCount = 4L,
+            rsvpMaybeCount = 2L,
+            rsvpNoCount = 1L,
+            myRsvp = RsvpChoice.YES.name,
+            rsvpByUser = mapOf("alice_123" to RsvpChoice.YES.name)
+        ).toUpdateMap()
+
+        assertThat(groupMap).doesNotContainKey("rsvpYesCount")
+        assertThat(groupMap).doesNotContainKey("rsvpMaybeCount")
+        assertThat(groupMap).doesNotContainKey("rsvpNoCount")
+        assertThat(groupMap).doesNotContainKey("myRsvp")
+        assertThat(groupMap).doesNotContainKey("rsvpByUser")
+
+        val personalMap = Outing(
+            ownerId = "alice_123",
+            groupId = "personal_alice_123",
+            rsvpYesCount = 1L,
+            rsvpMaybeCount = 2L,
+            rsvpNoCount = 0L,
+            myRsvp = RsvpChoice.MAYBE.name,
+            rsvpByUser = mapOf("alice_123" to RsvpChoice.MAYBE.name)
+        ).toUpdateMap()
+        assertThat(personalMap["rsvpMaybeCount"]).isEqualTo(2L)
+        assertThat(personalMap["myRsvp"]).isEqualTo(RsvpChoice.MAYBE.name)
+        assertThat(personalMap["rsvpByUser"]).isEqualTo(mapOf("alice_123" to RsvpChoice.MAYBE.name))
+    }
+
+    @Test
+    fun outingRsvp_createMapIsCanonicalAndRejectsNoneOrInvalidScope() {
+        val response = OutingRsvp(
+            outingId = "outing_123",
+            userId = "alice_123",
+            groupId = "v2_grp_12345678901234567890",
+            groupGenerationId = "c".repeat(32),
+            choice = RsvpChoice.MAYBE.name
+        )
+        val payload = response.toCreateMap()
+
+        assertThat(payload.keys).containsExactly(
+            "outingId", "userId", "groupId", "groupGenerationId", "choice", "createdAt", "updatedAt"
+        )
+        assertThat(payload["outingId"]).isEqualTo("outing_123")
+        assertThat(payload["userId"]).isEqualTo("alice_123")
+        assertThat(payload["choice"]).isEqualTo(RsvpChoice.MAYBE.name)
+        assertThat(response.copy(id = "alice_123").belongsToCurrentGroup(
+            "v2_grp_12345678901234567890", "c".repeat(32)
+        )).isTrue()
+        assertThat(response.copy(id = "bob_456").belongsToCurrentGroup(
+            "v2_grp_12345678901234567890", "c".repeat(32)
+        )).isFalse()
+        assertThat(response.copy(id = "alice_123", groupGenerationId = "d".repeat(32))
+            .belongsToCurrentGroup("v2_grp_12345678901234567890", "c".repeat(32))).isFalse()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            response.copy(choice = RsvpChoice.NONE.name).toCreateMap()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            response.copy(groupGenerationId = "invalid").toCreateMap()
+        }
     }
 }

@@ -24,6 +24,14 @@ enum class OperationType(val value: String) {
 
 fun todayIsoDate(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
+private fun requireValidGroupGenerationId(value: String): String {
+    val clean = value.trim()
+    require(clean.matches(Regex("^[a-f0-9]{32}$"))) {
+        "La generación del grupo debe tener 32 caracteres hexadecimales en minúscula"
+    }
+    return clean
+}
+
 fun handleFirestoreError(exception: Exception, operationType: OperationType, path: String?): String {
     val currentUser = try {
         FirebaseAuth.getInstance().currentUser
@@ -108,6 +116,7 @@ data class SocialGroup(
     val inviteCode: String = "", // Legacy v1 read-only metadata; v2 groups store invites in /group_invites/{token}
     val createdBy: String = "",
     val schemaVersion: Long = 1L,
+    val generationId: String = "",
     val memberIds: List<String> = emptyList(), // Legacy v1 fallback; v2 membership lives in /groups/{groupId}/members/{uid}
     val memberNames: Map<String, String> = emptyMap(), // Legacy v1 fallback
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -135,10 +144,12 @@ data class SocialGroup(
      * shared member arrays (membership is stored per-user in /groups/{groupId}/members/{uid}).
      */
     fun toV2CreateMap(creatorUid: String): Map<String, Any> {
+        val cleanGenerationId = requireValidGroupGenerationId(generationId)
         return mapOf(
             "name" to name.take(80).ifBlank { "Mi Grupo" },
             "createdBy" to creatorUid,
             "schemaVersion" to 2L,
+            "generationId" to cleanGenerationId,
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -150,6 +161,7 @@ data class GroupMember(
     @DocumentId val id: String = "",
     val userId: String = "",
     val groupId: String = "",
+    val groupGenerationId: String = "",
     val displayName: String = "",
     val role: String = GroupRole.MEMBER.name,
     val inviteToken: String = "",
@@ -160,7 +172,7 @@ data class GroupMember(
         get() = GroupRole.fromString(role)
 
     companion object {
-        fun toOwnerCreateMap(uid: String, groupId: String, displayName: String): Map<String, Any> = mapOf(
+        fun toOwnerCreateMap(uid: String, groupId: String, displayName: String, groupGenerationId: String): Map<String, Any> = withGenerationId(mapOf(
             "userId" to uid,
             "groupId" to groupId.take(128),
             "displayName" to displayName.take(60).ifBlank { "Usuario" },
@@ -168,14 +180,15 @@ data class GroupMember(
             "inviteToken" to "",
             "joinedAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
-        )
+        ), groupGenerationId, required = true)
 
         fun toInviteJoinCreateMap(
             uid: String,
             groupId: String,
             displayName: String,
-            inviteToken: String
-        ): Map<String, Any> = mapOf(
+            inviteToken: String,
+            groupGenerationId: String
+        ): Map<String, Any> = withGenerationId(mapOf(
             "userId" to uid,
             "groupId" to groupId.take(128),
             "displayName" to displayName.take(60).ifBlank { "Usuario" },
@@ -183,14 +196,15 @@ data class GroupMember(
             "inviteToken" to inviteToken.take(64),
             "joinedAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
-        )
+        ), groupGenerationId, required = true)
 
         fun toLegacyBackfillCreateMap(
             uid: String,
             groupId: String,
             displayName: String,
-            role: GroupRole
-        ): Map<String, Any> = mapOf(
+            role: GroupRole,
+            groupGenerationId: String = ""
+        ): Map<String, Any> = withGenerationId(mapOf(
             "userId" to uid,
             "groupId" to groupId.take(128),
             "displayName" to displayName.take(60).ifBlank { "Usuario" },
@@ -198,7 +212,18 @@ data class GroupMember(
             "inviteToken" to "",
             "joinedAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
-        )
+        ), groupGenerationId)
+
+        private fun withGenerationId(
+            payload: Map<String, Any>,
+            groupGenerationId: String,
+            required: Boolean = false
+        ): Map<String, Any> {
+            val cleanGenerationId = groupGenerationId.trim()
+            if (required) requireValidGroupGenerationId(cleanGenerationId)
+            else if (cleanGenerationId.isNotBlank()) requireValidGroupGenerationId(cleanGenerationId)
+            return if (cleanGenerationId.isBlank()) payload else payload + ("groupGenerationId" to cleanGenerationId)
+        }
 
         fun toSelfUpdateMap(displayName: String): Map<String, Any> = mapOf(
             "displayName" to displayName.take(60).ifBlank { "Usuario" },
@@ -212,6 +237,7 @@ data class GroupInvite(
     @DocumentId val id: String = "",
     val token: String = "",
     val groupId: String = "",
+    val groupGenerationId: String = "",
     val groupNamePreview: String = "",
     val createdBy: String = "",
     val revoked: Boolean = false,
@@ -236,7 +262,8 @@ data class GroupInvite(
             groupNamePreview: String,
             creatorUid: String,
             expiresAt: Timestamp,
-            maxUses: Long
+            maxUses: Long,
+            groupGenerationId: String
         ): Map<String, Any> = mapOf(
             "token" to token.take(64),
             "groupId" to groupId.take(128),
@@ -249,7 +276,10 @@ data class GroupInvite(
             "lastRedeemedBy" to "",
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
-        )
+        ).let { payload ->
+            val cleanGenerationId = requireValidGroupGenerationId(groupGenerationId)
+            payload + ("groupGenerationId" to cleanGenerationId)
+        }
     }
 }
 
@@ -311,6 +341,7 @@ data class Outing(
     @DocumentId val id: String = "",
     val ownerId: String = "",
     val groupId: String = "",
+    val groupGenerationId: String = "",
     val title: String = "",
     val location: String = "",
     val meetingPoint: String = "",
@@ -348,13 +379,16 @@ data class Outing(
     }
 
     fun toCreateMap(uid: String): Map<String, Any> {
+        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
+        val isPersonalScope = effectiveGroupId.startsWith("personal_")
         val normalizedMap = if (rsvpByUser.isEmpty() && RsvpChoice.fromString(myRsvp) != RsvpChoice.NONE) {
             mapOf(uid to RsvpChoice.fromString(myRsvp).name)
         } else {
             rsvpByUser
         }
-        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
-        return mapOf(
+        val persistedRsvpByUser = if (isPersonalScope) normalizedMap else emptyMap()
+        val persistedMyRsvp = if (isPersonalScope) RsvpChoice.fromString(myRsvp).name else RsvpChoice.NONE.name
+        val payload = mapOf(
             "ownerId" to uid,
             "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
@@ -371,20 +405,26 @@ data class Outing(
             "destLng" to destLng,
             "meetLat" to meetLat,
             "meetLng" to meetLng,
-            "rsvpYesCount" to rsvpYesCount.coerceAtLeast(0L),
-            "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
-            "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
-            "myRsvp" to RsvpChoice.fromString(myRsvp).name,
-            "rsvpByUser" to normalizedMap,
+            "rsvpYesCount" to if (isPersonalScope) rsvpYesCount.coerceAtLeast(0L) else 0L,
+            "rsvpMaybeCount" to if (isPersonalScope) rsvpMaybeCount.coerceAtLeast(0L) else 0L,
+            "rsvpNoCount" to if (isPersonalScope) rsvpNoCount.coerceAtLeast(0L) else 0L,
+            "myRsvp" to persistedMyRsvp,
+            "rsvpByUser" to persistedRsvpByUser,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        val cleanGenerationId = groupGenerationId.trim()
+        return if (groupId.isNotBlank() && cleanGenerationId.isNotBlank()) {
+            payload + ("groupGenerationId" to requireValidGroupGenerationId(cleanGenerationId))
+        } else {
+            payload
+        }
     }
 
     fun toUpdateMap(): Map<String, Any> {
         val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, ownerId)
-        return mapOf(
+        val payload = mapOf(
             "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
@@ -400,12 +440,74 @@ data class Outing(
             "destLng" to destLng,
             "meetLat" to meetLat,
             "meetLng" to meetLng,
-            "rsvpYesCount" to rsvpYesCount.coerceAtLeast(0L),
-            "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
-            "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
-            "myRsvp" to RsvpChoice.fromString(myRsvp).name,
-            "rsvpByUser" to rsvpByUser,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val personalRsvpPayload = if (effectiveGroupId.startsWith("personal_")) {
+            mapOf(
+                "rsvpYesCount" to rsvpYesCount.coerceAtLeast(0L),
+                "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
+                "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
+                "myRsvp" to RsvpChoice.fromString(myRsvp).name,
+                "rsvpByUser" to rsvpByUser
+            )
+        } else {
+            emptyMap()
+        }
+        val cleanGenerationId = groupGenerationId.trim()
+        return if (groupId.isNotBlank() && cleanGenerationId.isNotBlank()) {
+            payload + personalRsvpPayload + ("groupGenerationId" to requireValidGroupGenerationId(cleanGenerationId))
+        } else {
+            payload + personalRsvpPayload
+        }
+    }
+}
+
+private fun requireValidOutingRsvpId(value: String, fieldName: String): String {
+    val clean = value.trim()
+    require(clean.matches(Regex("^[a-zA-Z0-9_\\-]{1,128}$"))) {
+        "$fieldName debe ser un ID Firestore válido"
+    }
+    return clean
+}
+
+@IgnoreExtraProperties
+data class OutingRsvp(
+    @DocumentId val id: String = "",
+    val outingId: String = "",
+    val userId: String = "",
+    val groupId: String = "",
+    val groupGenerationId: String = "",
+    val choice: String = RsvpChoice.NONE.name,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val rsvpChoice: RsvpChoice
+        get() = RsvpChoice.fromString(choice)
+
+    fun belongsToCurrentGroup(expectedGroupId: String, expectedGenerationId: String): Boolean {
+        return id.isNotBlank() && id == userId &&
+            outingId.isNotBlank() && groupId == expectedGroupId &&
+            groupGenerationId == expectedGenerationId &&
+            rsvpChoice in listOf(RsvpChoice.YES, RsvpChoice.MAYBE, RsvpChoice.NO)
+    }
+
+    fun toCreateMap(): Map<String, Any> {
+        val cleanOutingId = requireValidOutingRsvpId(outingId, "outingId")
+        val cleanUserId = requireValidOutingRsvpId(userId, "userId")
+        val cleanGroupId = requireValidOutingRsvpId(groupId, "groupId")
+        val cleanGenerationId = requireValidGroupGenerationId(groupGenerationId)
+        val cleanChoice = RsvpChoice.fromString(choice)
+        require(cleanChoice in listOf(RsvpChoice.YES, RsvpChoice.MAYBE, RsvpChoice.NO)) {
+            "Una respuesta RSVP debe ser YES, MAYBE o NO"
+        }
+        return mapOf(
+            "outingId" to cleanOutingId,
+            "userId" to cleanUserId,
+            "groupId" to cleanGroupId,
+            "groupGenerationId" to cleanGenerationId,
+            "choice" to cleanChoice.name,
+            "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
     }
@@ -417,6 +519,7 @@ data class GroupChatMessage(
     val senderId: String = "",
     val senderName: String = "",
     val groupId: String = "",
+    val groupGenerationId: String = "",
     val text: String = "",
     val messageType: String = "TEXT", // TEXT, VOICE, OUTING_SHARE, STORY_REACTION
     val audioDurationSec: Long = 0L,
@@ -434,11 +537,9 @@ data class GroupChatMessage(
         } else {
             "TEXT"
         }
-        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
-        return mapOf(
+        val payload = mutableMapOf<String, Any>(
             "senderId" to uid,
             "senderName" to senderName.take(80).ifBlank { "Miembro" },
-            "groupId" to effectiveGroupId,
             "text" to text.take(1000),
             "messageType" to validType,
             "audioDurationSec" to audioDurationSec.coerceAtLeast(0L),
@@ -450,6 +551,9 @@ data class GroupChatMessage(
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        groupId.trim().take(128).takeIf { it.isNotBlank() }?.let { payload["groupId"] = it }
+        groupGenerationId.trim().take(128).takeIf { it.isNotBlank() }?.let { payload["groupGenerationId"] = it }
+        return payload
     }
 }
 
@@ -459,6 +563,7 @@ data class OutingStory(
     val authorId: String = "",
     val authorName: String = "",
     val groupId: String = "",
+    val groupGenerationId: String = "",
     val caption: String = "",
     val filterStyle: String = "OBSIDIAN",
     val mediaUri: String = "story_sunset",
@@ -468,11 +573,9 @@ data class OutingStory(
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     fun toCreateMap(uid: String): Map<String, Any> {
-        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
-        return mapOf(
+        val payload = mutableMapOf<String, Any>(
             "authorId" to uid,
             "authorName" to authorName.take(80).ifBlank { "Miembro" },
-            "groupId" to effectiveGroupId,
             "caption" to caption.take(300),
             "filterStyle" to filterStyle.take(40).ifBlank { "OBSIDIAN" },
             "mediaUri" to mediaUri.take(500).ifBlank { "story_sunset" },
@@ -481,5 +584,8 @@ data class OutingStory(
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        groupId.trim().take(128).takeIf { it.isNotBlank() }?.let { payload["groupId"] = it }
+        groupGenerationId.trim().take(128).takeIf { it.isNotBlank() }?.let { payload["groupGenerationId"] = it }
+        return payload
     }
 }

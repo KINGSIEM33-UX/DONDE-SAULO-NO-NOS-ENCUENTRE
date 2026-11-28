@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.CloudLoadState
 import com.example.data.Outing
 import com.example.data.OutingStatus
 import com.example.data.RsvpChoice
@@ -98,7 +99,11 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     val stories by viewModel.stories.collectAsState()
     val defaultCurrency by viewModel.defaultCurrency.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val userProfile by viewModel.userProfile.collectAsState()
     val syncState by viewModel.socialSyncState.collectAsState()
+    val groupOutingRsvpState by viewModel.groupOutingRsvpState.collectAsState()
+    val canRespondToOutingRsvp = syncState.isGuestDemo || groupOutingRsvpState is CloudLoadState.Loaded
+    val hasGroupOutingScope = userProfile.groupId.isNotBlank()
     val outingsLoadState = syncState.outingsState
 
     val todayCal = remember { Calendar.getInstance() }
@@ -421,6 +426,22 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 }
             }
 
+            if (!syncState.isGuestDemo && hasGroupOutingScope && groupOutingRsvpState is CloudLoadState.Loading) {
+                item {
+                    EditorialCloudLoadingCard(label = "Verificando respuestas y acceso seguro del grupo…")
+                }
+            }
+            if (!syncState.isGuestDemo && hasGroupOutingScope && groupOutingRsvpState is CloudLoadState.Error) {
+                item {
+                    EditorialCloudErrorCard(
+                        title = "RSVP de grupo no disponible",
+                        message = (groupOutingRsvpState as CloudLoadState.Error).message,
+                        onRetry = { viewModel.retryGroupOutingRsvps() },
+                        compact = true
+                    )
+                }
+            }
+
             when {
                 outingsLoadState is com.example.data.CloudLoadState.Loading && upcomingOutings.isEmpty() -> {
                     item {
@@ -461,6 +482,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                             EditorialOutingCard(
                                 outing = outing,
                                 currentUserId = currentUserId,
+                                canRespondToRsvp = canRespondToOutingRsvp,
                                 onCardClick = { activeDetailOuting = outing },
                                 onEditClick = {
                                     editingOuting = outing
@@ -508,6 +530,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
         OutingQuickDetailDialog(
             outing = freshOuting,
             currentUserId = currentUserId,
+            canRespondToRsvp = canRespondToOutingRsvp,
             onDismiss = { activeDetailOuting = null },
             onRsvpChange = { choice -> viewModel.updateOutingRsvp(freshOuting.id, choice) },
             onStatusChange = { newStatus -> viewModel.updateOutingStatusColor(freshOuting.id, newStatus) },
@@ -542,11 +565,18 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 viewModel.saveOrUpdateOuting(savedOuting)
                 showOutingFormDialog = false
             },
-            onDelete = editingOuting?.let { toDelete ->
+            onDelete = editingOuting?.takeIf {
+                syncState.isGuestDemo || it.groupId.startsWith("personal_")
+            }?.let { toDelete ->
                 {
                     viewModel.deleteOuting(toDelete.id)
                     showOutingFormDialog = false
                 }
+            },
+            deletionWarning = editingOuting?.takeIf {
+                !syncState.isGuestDemo && !it.groupId.startsWith("personal_")
+            }?.let {
+                "Las salidas grupales no se borran para conservar las respuestas individuales. Puedes marcarlas como canceladas."
             }
         )
     }
@@ -702,6 +732,7 @@ private fun CalendarLegendItem(
 private fun EditorialOutingCard(
     outing: Outing,
     currentUserId: String?,
+    canRespondToRsvp: Boolean,
     onCardClick: () -> Unit,
     onEditClick: () -> Unit,
     onRsvpSelected: (RsvpChoice) -> Unit
@@ -801,6 +832,7 @@ private fun EditorialOutingCard(
                     )
                 ),
                 selectedId = userRsvp?.name,
+                enabled = canRespondToRsvp,
                 onSelect = { id ->
                     RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpSelected)
                 },
@@ -814,6 +846,7 @@ private fun EditorialOutingCard(
 fun OutingQuickDetailDialog(
     outing: Outing,
     currentUserId: String?,
+    canRespondToRsvp: Boolean,
     onDismiss: () -> Unit,
     onRsvpChange: (RsvpChoice) -> Unit,
     onStatusChange: (OutingStatus) -> Unit,
@@ -871,9 +904,19 @@ fun OutingQuickDetailDialog(
                         RubberSegmentOption(RsvpChoice.NO.name, "No", StatusCancelledRed, Color.White)
                     ),
                     selectedId = userRsvp?.name,
+                    enabled = canRespondToRsvp,
                     onSelect = { id -> RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpChange) },
                     height = 40.dp
                 )
+                if (userRsvp != RsvpChoice.NONE) {
+                    TextButton(
+                        onClick = { onRsvpChange(RsvpChoice.NONE) },
+                        enabled = canRespondToRsvp,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Quitar respuesta")
+                    }
+                }
 
                 Text("Estado en el calendario", style = MaterialTheme.typography.labelLarge)
                 RubberSegmentedBar(
@@ -918,7 +961,8 @@ fun OutingFormDialog(
     defaultCurrency: String,
     onDismiss: () -> Unit,
     onSave: (Outing) -> Unit,
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    deletionWarning: String? = null
 ) {
     val pickerContext = LocalContext.current
     var title by remember { mutableStateOf(initialOuting?.title ?: "") }
@@ -1084,6 +1128,13 @@ fun OutingFormDialog(
                 }
 
                 // React Bits Micro 2.0 — Hold Button for safe destructive confirmation
+                if (!deletionWarning.isNullOrBlank()) {
+                    Text(
+                        text = deletionWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (onDelete != null) {
                     Spacer(modifier = Modifier.height(4.dp))
                     HoldToConfirmButton(

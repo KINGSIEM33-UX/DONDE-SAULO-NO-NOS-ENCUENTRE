@@ -9,8 +9,10 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -45,24 +47,32 @@ class SocialRepository(
     }
 
     fun observeGroupMembers(groupId: String): Flow<List<GroupMember>> {
-        return db.collection(GROUPS_COLLECTION)
-            .document(groupId)
-            .collection(MEMBERS_SUBCOLLECTION)
-            .snapshots()
-            .map { snap ->
+        return observeGroup(groupId).flatMapLatest { group ->
+            if (group == null) return@flatMapLatest emptyFlow()
+            val generationId = requireCurrentGroupGenerationId(groupId, group.generationId)
+            db.collection(GROUPS_COLLECTION)
+                .document(groupId)
+                .collection(MEMBERS_SUBCOLLECTION)
+                .whereEqualTo("groupGenerationId", generationId)
+                .snapshots().map { snap ->
                 snap.toObjects(GroupMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedWith(compareBy<GroupMember> { it.groupRole.ordinal }.thenBy { it.displayName.lowercase() })
             }
+        }
     }
 
     fun observeGroupInvites(groupId: String): Flow<List<GroupInvite>> {
-        return db.collection(GROUP_INVITES_COLLECTION)
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snap ->
+        return observeGroup(groupId).flatMapLatest { group ->
+            if (group == null) return@flatMapLatest emptyFlow()
+            val generationId = requireCurrentGroupGenerationId(groupId, group.generationId)
+            db.collection(GROUP_INVITES_COLLECTION)
+                .whereEqualTo("groupId", groupId)
+                .whereEqualTo("groupGenerationId", generationId)
+                .snapshots().map { snap ->
                 snap.toObjects(GroupInvite::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedByDescending { it.createdAt?.seconds ?: 0L }
             }
+        }
     }
 
     /**
@@ -77,6 +87,7 @@ class SocialRepository(
     ): Result<SocialGroup> = runCatching {
         val cleanName = groupName.trim().take(80).ifBlank { "Grupo de Salidas" }
         val groupId = GroupInviteCrypto.generateHighEntropyGroupId()
+        val groupGenerationId = UUID.randomUUID().toString().replace("-", "")
         val groupRef = db.collection(GROUPS_COLLECTION).document(groupId)
         val registryRef = db.collection(GROUP_ID_REGISTRY_COLLECTION).document(groupId)
         val ownerMemberRef = groupRef.collection(MEMBERS_SUBCOLLECTION).document(creatorUid)
@@ -85,17 +96,19 @@ class SocialRepository(
                 id = groupId,
                 name = cleanName,
                 createdBy = creatorUid,
-                schemaVersion = 2L
+                schemaVersion = 2L,
+                generationId = groupGenerationId
             )
             val batch = db.batch()
             batch.set(registryRef, mapOf(
                 "groupId" to groupId,
                 "createdBy" to creatorUid,
                 "schemaVersion" to 2L,
+                "generationId" to groupGenerationId,
                 "createdAt" to FieldValue.serverTimestamp()
             ))
             batch.set(groupRef, group.toV2CreateMap(creatorUid))
-            batch.set(ownerMemberRef, GroupMember.toOwnerCreateMap(creatorUid, groupId, creatorName))
+            batch.set(ownerMemberRef, GroupMember.toOwnerCreateMap(creatorUid, groupId, creatorName, groupGenerationId))
             batch.commit().await()
             group
         } catch (e: CancellationException) {
@@ -119,6 +132,7 @@ class SocialRepository(
     ): Result<GroupInvite> = runCatching {
         val cleanGroupId = groupId.trim()
         require(cleanGroupId.isNotBlank()) { "El grupo no es válido" }
+        val groupGenerationId = resolveGroupGenerationId(cleanGroupId)
         val token = GroupInviteCrypto.generateHighEntropyInviteToken()
         val safeMaxUses = maxUses.coerceIn(1L, 100L)
         val safeHours = expiresInHours.coerceIn(1L, 24L * 30L)
@@ -134,13 +148,15 @@ class SocialRepository(
                     groupNamePreview = groupNamePreview,
                     creatorUid = creatorUid,
                     expiresAt = expiresAt,
-                    maxUses = safeMaxUses
+                    maxUses = safeMaxUses,
+                    groupGenerationId = groupGenerationId
                 )
             ).await()
             GroupInvite(
                 id = token,
                 token = token,
                 groupId = cleanGroupId,
+                groupGenerationId = groupGenerationId,
                 groupNamePreview = groupNamePreview.take(80).ifBlank { "Grupo" },
                 createdBy = creatorUid,
                 revoked = false,
@@ -200,6 +216,23 @@ class SocialRepository(
 
         val inviteRef = db.collection(GROUP_INVITES_COLLECTION).document(normalized)
         return try {
+            // If an orphaned child record survived a prior group incarnation, remove only
+            // this user's stale membership first. The invite redemption below remains atomic;
+            // this cleanup grants no access and is safe to retry if redemption later fails.
+            val invitePreview = inviteRef.get().await().toObject(GroupInvite::class.java)
+            if (invitePreview != null) {
+                val memberRef = db.collection(GROUPS_COLLECTION)
+                    .document(invitePreview.groupId)
+                    .collection(MEMBERS_SUBCOLLECTION)
+                    .document(userId)
+                val memberPreview = memberRef.get().await()
+                if (memberPreview.exists() &&
+                    memberPreview.getString("groupGenerationId").orEmpty() != invitePreview.groupGenerationId
+                ) {
+                    memberRef.delete().await()
+                }
+            }
+
             val (joinedGroupId, alreadyMember) = db.runTransaction { tx ->
                 val inviteSnap = tx.get(inviteRef)
                 if (!inviteSnap.exists()) {
@@ -213,7 +246,8 @@ class SocialRepository(
                     .collection(MEMBERS_SUBCOLLECTION)
                     .document(userId)
                 val existingMemberSnap = tx.get(memberRef)
-                if (existingMemberSnap.exists()) {
+                val existingMember = existingMemberSnap.toObject(GroupMember::class.java)
+                if (existingMemberSnap.exists() && existingMember?.groupGenerationId == invite.groupGenerationId) {
                     return@runTransaction invite.groupId to true
                 }
 
@@ -242,7 +276,8 @@ class SocialRepository(
                                 uid = userId,
                                 groupId = invite.groupId,
                                 displayName = displayName,
-                                inviteToken = normalized
+                                inviteToken = normalized,
+                                groupGenerationId = invite.groupGenerationId
                             )
                         )
                         invite.groupId to false
@@ -301,7 +336,15 @@ class SocialRepository(
         val snap = memberRef.get().await()
         if (!snap.exists()) {
             val role = if (group.createdBy == userId) GroupRole.OWNER else GroupRole.MEMBER
-            memberRef.set(GroupMember.toLegacyBackfillCreateMap(userId, group.id, displayName, role)).await()
+            memberRef.set(
+                GroupMember.toLegacyBackfillCreateMap(
+                    uid = userId,
+                    groupId = group.id,
+                    displayName = displayName,
+                    role = role,
+                    groupGenerationId = group.generationId
+                )
+            ).await()
         }
     }
 
@@ -328,6 +371,64 @@ class SocialRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, memberRef.path)
+            throw e
+        }
+    }
+
+    fun observeGroupPosts(groupId: String): Flow<List<GroupPost>> {
+        require(groupId.isNotBlank()) { "El grupo activo es obligatorio" }
+        return observeGroup(groupId).flatMapLatest { group ->
+            val generationId = group?.generationId?.takeIf { it.isNotBlank() } ?: return@flatMapLatest emptyFlow()
+            db.collection(GROUP_POSTS_COLLECTION)
+                .whereEqualTo("groupId", groupId)
+                .whereEqualTo("groupGenerationId", generationId)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        GroupPost::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+                }
+            }
+    }
+
+    suspend fun createGroupPost(post: GroupPost, userId: String = requireUserId()): Result<String> = runCatching {
+        val generationId = resolveGroupGenerationId(post.groupId)
+        require(generationId.isNotBlank()) { "No se pudo verificar la generación actual del grupo" }
+        val currentPost = post.copy(groupGenerationId = generationId)
+        val postId = post.id.ifBlank { "post_${UUID.randomUUID().toString().replace("-", "").take(20)}" }
+        val docRef = db.collection(GROUP_POSTS_COLLECTION).document(postId)
+        try {
+            docRef.set(currentPost.toCreateMap(userId)).await()
+            postId
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteGroupPost(
+        postId: String,
+        expectedGroupId: String,
+        userId: String = requireUserId()
+    ): Result<Unit> = runCatching {
+        require(postId.isNotBlank()) { "La publicación no es válida" }
+        val docRef = db.collection(GROUP_POSTS_COLLECTION).document(postId)
+        try {
+            val snapshot = docRef.get().await()
+            if (!snapshot.exists()) return@runCatching Unit
+            val post = snapshot.toObject(GroupPost::class.java)
+                ?: throw IllegalStateException("La publicación no es válida")
+            require(post.groupId == expectedGroupId && post.authorId == userId) {
+                "Solo puedes borrar tus propias publicaciones del grupo activo"
+            }
+            docRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
             throw e
         }
     }
@@ -400,10 +501,11 @@ class SocialRepository(
 
     fun observeGroupOutings(groupId: String): Flow<List<Outing>> {
         return observeGroup(groupId).flatMapLatest { group ->
-            val generationStart = group?.createdAt ?: return@flatMapLatest emptyFlow()
+            if (group == null) return@flatMapLatest emptyFlow()
+            val generationId = requireCurrentGroupGenerationId(groupId, group.generationId)
             db.collection(OUTINGS_COLLECTION)
                 .whereEqualTo("groupId", groupId)
-                .whereGreaterThanOrEqualTo("createdAt", generationStart)
+                .whereEqualTo("groupGenerationId", generationId)
                 .snapshots()
                 .map { querySnapshot ->
                     querySnapshot.toObjects(
@@ -412,6 +514,45 @@ class SocialRepository(
                     ).sortedBy { it.dateIso + " " + it.time }
                 }
             }
+    }
+
+    fun observeGroupOutingRsvps(
+        groupId: String,
+        groupGenerationId: String,
+        memberIds: List<String>
+    ): Flow<List<OutingRsvp>> {
+        val generationId = requireCurrentGroupGenerationId(groupId, groupGenerationId)
+        val currentMemberIds = memberIds.map(String::trim).filter(String::isNotBlank).distinct()
+        return observeGroupOutings(groupId).flatMapLatest { outings ->
+            val responseFlows = outings
+                .filter { it.groupId == groupId && it.groupGenerationId == generationId && it.id.isNotBlank() }
+                .flatMap { outing ->
+                    currentMemberIds.map { memberId ->
+                        db.collection(OUTINGS_COLLECTION)
+                            .document(outing.id)
+                            .collection(OUTING_RSVPS_SUBCOLLECTION)
+                            .document(memberId)
+                            .snapshots()
+                            .map { snapshot ->
+                                snapshot.toObject(
+                                    OutingRsvp::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )?.takeIf { response ->
+                                    response.id == memberId && response.userId == memberId &&
+                                        response.outingId == outing.id &&
+                                        response.belongsToCurrentGroup(groupId, generationId)
+                                }
+                            }
+                    }
+                }
+            if (responseFlows.isEmpty()) {
+                flowOf(emptyList())
+            } else {
+                combine(responseFlows) { responsesByOuting ->
+                    responsesByOuting.filterNotNull()
+                }
+            }
+        }
     }
 
     suspend fun getUserOutings(userId: String = requireUserId()): Result<List<Outing>> = runCatching {
@@ -446,10 +587,12 @@ class SocialRepository(
     }
 
     suspend fun createOuting(outing: Outing, userId: String = requireUserId()): Result<String> = runCatching {
+        val groupGenerationId = resolveGroupGenerationId(outing.groupId)
+        val currentOuting = outing.copy(groupGenerationId = groupGenerationId)
         val docId = outing.id.ifBlank { "outing_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
         val docRef = db.collection(OUTINGS_COLLECTION).document(docId)
         try {
-            docRef.set(outing.toCreateMap(userId)).await()
+            docRef.set(currentOuting.toCreateMap(userId)).await()
             docId
         } catch (e: CancellationException) {
             throw e
@@ -460,15 +603,17 @@ class SocialRepository(
     }
 
     suspend fun upsertOuting(outing: Outing, userId: String = requireUserId()): Result<String> = runCatching {
+        val groupGenerationId = resolveGroupGenerationId(outing.groupId)
+        val currentOuting = outing.copy(groupGenerationId = groupGenerationId)
         val docId = outing.id.ifBlank { "outing_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
         val docRef = db.collection(OUTINGS_COLLECTION).document(docId)
         try {
             db.runTransaction { tx ->
                 val snap = tx.get(docRef)
                 if (snap.exists()) {
-                    tx.update(docRef, outing.toUpdateMap())
+                    tx.update(docRef, currentOuting.toUpdateMap())
                 } else {
-                    tx.set(docRef, outing.copy(id = docId).toCreateMap(userId))
+                    tx.set(docRef, currentOuting.copy(id = docId).toCreateMap(userId))
                 }
             }.await()
             docId
@@ -482,9 +627,11 @@ class SocialRepository(
 
     suspend fun updateOuting(outing: Outing): Result<Unit> = runCatching {
         require(outing.id.isNotBlank()) { "Outing ID must not be blank for update" }
+        val groupGenerationId = resolveGroupGenerationId(outing.groupId)
+        val currentOuting = outing.copy(groupGenerationId = groupGenerationId)
         val docRef = db.collection(OUTINGS_COLLECTION).document(outing.id)
         try {
-            docRef.update(outing.toUpdateMap()).await()
+            docRef.update(currentOuting.toUpdateMap()).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -498,12 +645,18 @@ class SocialRepository(
         userId: String = requireUserId(),
         choice: RsvpChoice
     ): Result<Unit> = runCatching {
+        val authUid = requireUserId()
+        check(userId == authUid) { "Solo se puede guardar la respuesta del usuario autenticado" }
         val docRef = db.collection(OUTINGS_COLLECTION).document(outingId)
         try {
             db.runTransaction { tx ->
                 val snap = tx.get(docRef)
                 if (!snap.exists()) return@runTransaction
                 val current = snap.toObject(Outing::class.java) ?: return@runTransaction
+                check(current.ownerId == authUid) { "Solo el propietario puede editar esta salida" }
+                check(current.groupId.startsWith("personal_")) {
+                    "Las respuestas de salidas de grupo deben guardarse en el documento RSVP propio"
+                }
                 val updatedMap = current.rsvpByUser.toMutableMap()
                 if (choice == RsvpChoice.NONE) {
                     updatedMap.remove(userId)
@@ -516,7 +669,7 @@ class SocialRepository(
                 tx.update(
                     docRef,
                     mapOf(
-                        "rsvpByUser" to updatedMap,
+                "rsvpByUser" to updatedMap,
                         "rsvpYesCount" to yesCount,
                         "rsvpMaybeCount" to maybeCount,
                         "rsvpNoCount" to noCount,
@@ -533,10 +686,107 @@ class SocialRepository(
         }
     }
 
+    suspend fun updateGroupOutingRsvpTransactional(
+        outingId: String,
+        groupId: String,
+        groupGenerationId: String,
+        choice: RsvpChoice,
+        userId: String = requireUserId()
+    ): Result<Unit> = runCatching {
+        val authUid = requireUserId()
+        check(userId == authUid) { "Solo se puede guardar la respuesta del usuario autenticado" }
+        check(groupId.isNotBlank() && !groupId.startsWith("personal_")) {
+            "La salida no pertenece a un grupo compartido"
+        }
+        val generationId = requireCurrentGroupGenerationId(groupId, groupGenerationId)
+        val groupRef = db.collection(GROUPS_COLLECTION).document(groupId)
+        val memberRef = groupRef.collection(MEMBERS_SUBCOLLECTION).document(authUid)
+        val outingRef = db.collection(OUTINGS_COLLECTION).document(outingId)
+        val responseRef = outingRef.collection(OUTING_RSVPS_SUBCOLLECTION).document(authUid)
+
+        try {
+            db.runTransaction { tx ->
+                val groupSnap = tx.get(groupRef)
+                val memberSnap = tx.get(memberRef)
+                val outingSnap = tx.get(outingRef)
+                val responseSnap = tx.get(responseRef)
+
+                val groupCreatedAt = groupSnap.getTimestamp("createdAt")
+                val memberJoinedAt = memberSnap.getTimestamp("joinedAt")
+                check(groupSnap.exists() && groupSnap.getString("generationId") == generationId) {
+                    "La generación del grupo ya no es la actual"
+                }
+                check(
+                    memberSnap.exists() &&
+                        memberSnap.getString("userId") == authUid &&
+                        memberSnap.getString("groupId") == groupId &&
+                        memberSnap.getString("groupGenerationId") == generationId &&
+                        groupCreatedAt != null && memberJoinedAt != null && memberJoinedAt >= groupCreatedAt
+                ) { "Se necesita una membresía v2 vigente para responder" }
+                check(
+                    outingSnap.exists() &&
+                        outingSnap.getString("groupId") == groupId &&
+                        outingSnap.getString("groupGenerationId") == generationId
+                ) { "La salida no pertenece a esta generación del grupo" }
+                if (responseSnap.exists()) {
+                    val existingChoice = responseSnap.getString("choice")
+                    check(
+                        responseSnap.getString("outingId") == outingId &&
+                            responseSnap.getString("userId") == authUid &&
+                            responseSnap.getString("groupId") == groupId &&
+                            responseSnap.getString("groupGenerationId") == generationId &&
+                            (existingChoice == RsvpChoice.YES.name ||
+                                existingChoice == RsvpChoice.MAYBE.name ||
+                                existingChoice == RsvpChoice.NO.name)
+                    ) { "La respuesta RSVP existente no es válida para esta salida" }
+                }
+
+                when {
+                    choice == RsvpChoice.NONE && responseSnap.exists() -> tx.delete(responseRef)
+                    choice == RsvpChoice.NONE -> Unit
+                    responseSnap.exists() -> tx.update(
+                        responseRef,
+                        mapOf(
+                            "choice" to choice.name,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    else -> tx.set(
+                        responseRef,
+                        OutingRsvp(
+                            outingId = outingId,
+                            userId = authUid,
+                            groupId = groupId,
+                            groupGenerationId = generationId,
+                            choice = choice.name
+                        ).toCreateMap()
+                    )
+                }
+            }.await()
+            Unit
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, responseRef.path)
+            throw e
+        }
+    }
+
     suspend fun deleteOuting(outingId: String): Result<Unit> = runCatching {
+        val authUid = requireUserId()
         val docRef = db.collection(OUTINGS_COLLECTION).document(outingId)
         try {
-            docRef.delete().await()
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                check(snap.exists()) { "La salida no existe" }
+                val current = snap.toObject(Outing::class.java)
+                    ?: error("No se pudo leer la salida")
+                check(current.ownerId == authUid) { "Solo el propietario puede borrar esta salida" }
+                check(current.groupId.startsWith("personal_")) {
+                    "Las salidas grupales se cancelan; no se borran físicamente"
+                }
+                tx.delete(docRef)
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -559,22 +809,29 @@ class SocialRepository(
     }
 
     fun observeGroupChatMessages(groupId: String): Flow<List<GroupChatMessage>> {
-        return db.collection(CHAT_COLLECTION)
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                snapshot.toObjects(
-                    GroupChatMessage::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ).sortedBy { it.createdAt?.seconds ?: 0L }
+        return observeGroup(groupId).flatMapLatest { group ->
+            if (group == null) return@flatMapLatest emptyFlow()
+            val generationId = requireCurrentGroupGenerationId(groupId, group.generationId)
+            db.collection(CHAT_COLLECTION)
+                .whereEqualTo("groupId", groupId)
+                .whereEqualTo("groupGenerationId", generationId)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        GroupChatMessage::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedBy { it.createdAt?.seconds ?: 0L }
+                }
             }
     }
 
     suspend fun sendChatMessage(message: GroupChatMessage, userId: String = requireUserId()): Result<String> = runCatching {
+        val groupGenerationId = resolveGroupGenerationId(message.groupId)
+        val currentMessage = message.copy(groupGenerationId = groupGenerationId)
         val docId = message.id.ifBlank { "msg_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
         val docRef = db.collection(CHAT_COLLECTION).document(docId)
         try {
-            docRef.set(message.toCreateMap(userId)).await()
+            docRef.set(currentMessage.toCreateMap(userId)).await()
             docId
         } catch (e: CancellationException) {
             throw e
@@ -615,22 +872,29 @@ class SocialRepository(
     }
 
     fun observeGroupStories(groupId: String): Flow<List<OutingStory>> {
-        return db.collection(STORIES_COLLECTION)
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                snapshot.toObjects(
-                    OutingStory::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+        return observeGroup(groupId).flatMapLatest { group ->
+            if (group == null) return@flatMapLatest emptyFlow()
+            val generationId = requireCurrentGroupGenerationId(groupId, group.generationId)
+            db.collection(STORIES_COLLECTION)
+                .whereEqualTo("groupId", groupId)
+                .whereEqualTo("groupGenerationId", generationId)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        OutingStory::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedByDescending { it.createdAt?.seconds ?: 0L }
+                }
             }
     }
 
     suspend fun createStory(story: OutingStory, userId: String = requireUserId()): Result<String> = runCatching {
+        val groupGenerationId = resolveGroupGenerationId(story.groupId)
+        val currentStory = story.copy(groupGenerationId = groupGenerationId)
         val docId = story.id.ifBlank { "story_${UUID.randomUUID().toString().replace("-", "").take(16)}" }
         val docRef = db.collection(STORIES_COLLECTION).document(docId)
         try {
-            docRef.set(story.toCreateMap(userId)).await()
+            docRef.set(currentStory.toCreateMap(userId)).await()
             docId
         } catch (e: CancellationException) {
             throw e
@@ -657,6 +921,28 @@ class SocialRepository(
         }
     }
 
+    private suspend fun resolveGroupGenerationId(groupId: String): String {
+        val cleanGroupId = groupId.trim()
+        if (cleanGroupId.isBlank() || cleanGroupId.startsWith("personal_")) return ""
+        val snapshot = try {
+            db.collection(GROUPS_COLLECTION).document(cleanGroupId).get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException("No se pudo verificar la generación actual del grupo", e)
+        }
+        check(snapshot.exists()) { "El grupo ya no existe o no es accesible" }
+        return requireCurrentGroupGenerationId(cleanGroupId, snapshot.getString("generationId").orEmpty())
+    }
+
+    internal fun requireCurrentGroupGenerationId(groupId: String, generationId: String): String {
+        val cleanGenerationId = generationId.trim()
+        check(groupId.isNotBlank() && cleanGenerationId.matches(Regex("^[a-f0-9]{32}$"))) {
+            "El grupo no tiene una generación actual verificable; requiere migración antes de mostrar su contenido social"
+        }
+        return cleanGenerationId
+    }
+
     companion object {
         const val GROUPS_COLLECTION = "groups"
         const val GROUP_ID_REGISTRY_COLLECTION = "groups_id_registry"
@@ -664,7 +950,9 @@ class SocialRepository(
         const val GROUP_INVITES_COLLECTION = "group_invites"
         const val USERS_COLLECTION = "users"
         const val OUTINGS_COLLECTION = "outings"
+        const val OUTING_RSVPS_SUBCOLLECTION = "rsvps"
         const val CHAT_COLLECTION = "chat_messages"
         const val STORIES_COLLECTION = "stories"
+        const val GROUP_POSTS_COLLECTION = "group_posts"
     }
 }

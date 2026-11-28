@@ -193,6 +193,12 @@ object SocialSessionPolicy {
         )
     }
 
+    /** Never retain group RSVP data after membership/scope loss or a non-transient failure. */
+    fun shouldRetainCachedGroupRsvpSnapshot(
+        scopeIsStillAuthorized: Boolean,
+        failureIsTransient: Boolean
+    ): Boolean = scopeIsStillAuthorized && failureIsTransient
+
     fun formatLoadErrorMessage(scopeLabel: String, throwable: Throwable?): String {
         val raw = throwable?.message.orEmpty()
         return when {

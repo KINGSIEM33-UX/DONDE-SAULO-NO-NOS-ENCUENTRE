@@ -1,6 +1,6 @@
 # Adora — Arquitectura de Invitaciones Seguras, Límites sin Backend y Plan de Migración
 
-> **Estado:** Prototipo verificado localmente en rama `cue/adora-invites-prototype-20261128` (**NO desplegado en Firebase**, cero facturación / Spark-compatible).
+> **Estado:** Prototipo verificado localmente en rama `cue/adora-final-integration` (**NO desplegado en Firebase**, cero facturación / Spark-compatible).
 
 ---
 
@@ -23,7 +23,7 @@
 3. **Aislamiento de roles y cambios propios:**
    - `MEMBER`: solo puede editar su propio `displayName` o salir (`delete` de su propio doc). No puede crear/revocar invitaciones, no puede escalar su `role` ni añadir/expulsar terceros.
    - `ADMIN`: puede crear/revocar invitaciones, renombrar el grupo y expulsar `MEMBER` (nunca `OWNER` ni otros `ADMIN`).
-   - `OWNER`: todos los permisos + promover/demotar `MEMBER ↔ ADMIN` + eliminar el grupo.
+   - `OWNER`: puede gestionar invitaciones, renombrar, expulsar miembros no propietarios y promover/demotar `MEMBER ↔ ADMIN`. La eliminación del grupo también está cerrada al cliente; requiere un proceso privilegiado que limpie primero todo el subárbol.
 4. **Compatibilidad con la futura integración de reglas de AI Studio:** Las secciones de `outings`, `chat_messages` y `stories` en `firestore.rules` conservan sus blueprints y pasan automáticamente a validar membresía dual mediante `isGroupMember(groupId)` (subcolección v2 + fallback legacy), listas para fusionar las reglas adicionales de creación de contenido de AI Studio sin conflictos estructurales.
 
 ---
@@ -46,7 +46,7 @@ Para restos legacy o grupos antiguos sin registry, una membresía v2 solo es vig
 
 `createdAt` y `joinedAt` siguen siendo valores aportados por el cliente y las Rules no los convierten en una prueba de generación criptográficamente segura. La comparación es una barrera monotónica de ciclo de vida, reforzada por la existencia del padre, la invitación vigente y la transacción de alta; no sustituye un reloj de servidor ni evita que un cliente elija una fecha pasada (esa escritura se rechaza para contenido grupal actual, pero un cliente puede conservar sus propios documentos históricos). Si la aplicación necesita garantías fuertes frente a eliminación/recreación administrada, debe bloquear la reutilización del ID o mover la creación de generaciones y marcas de tiempo a un backend privilegiado; mientras tanto, las Rules permanecen fail-closed y no eliminan registros.
 
-**Límite corregido en esta rama:** Firestore Rules no puede demostrar para cada candidato una comparación dinámica `resource.createdAt >= get(parent).createdAt` a partir de un `where("groupId", "==", ...)`, ni puede confiar en un timestamp escrito por el cliente como prueba de generación. Por ello las reglas ahora niegan (`allow list: false` para el ámbito grupal) cualquier listado por grupo; solo siguen permitidos listados de propiedad directa (`ownerId`, `senderId`, `authorId`). Esto es fail-closed y evita revelar históricos, pero degrada la lectura grupal en clientes sin backend. El aislamiento fuerte y reversible de listados requiere un backend privilegiado/tombstone o materializar cada generación en una ruta/colección distinta. No se debe desplegar esta rama esperando que el cliente reconstruya la funcionalidad de listados de forma segura.
+**Límite de las consultas Firestore:** Rules no puede demostrar para cada candidato la comparación dinámica `resource.createdAt >= get(parent).createdAt` en una consulta `list`. Por eso las listas del feed privado usan como frontera de autorización el `groupGenerationId` comparado con el grupo y su registry inmutable, además de exigir que la consulta quede acotada al grupo y generación actuales y que el usuario sea miembro actual. El cliente sigue sin poder crear posts con timestamp anterior al inicio del grupo: la regla de creación valida esa condición, y la lectura directa también la conserva. No se deben etiquetar posts históricos con la generación activa durante una migración; los datos antiguos sin generación válida quedan fuera de las consultas. Este diseño conserva queries válidas sin tratar un timestamp aportado por cliente como prueba de identidad de generación. La migración legacy y el despliegue siguen bloqueados hasta completar el inventario y el backfill privilegiado verificado descrito abajo.
 
 Si en el futuro se necesita eliminar grupos, debe hacerse mediante una migración privilegiada que enumere y respalde primero todo el árbol, elimine miembros/invitaciones/contenido y solo después elimine el padre; no debe reutilizarse el ID hasta completar esa operación. Esta rama no borra datos ni implementa ese backend.
 
@@ -62,24 +62,19 @@ No se ha activado facturación ni Cloud Functions. Sin un backend privilegiado (
 
 ---
 
-## 4. Camino de migración y backfill reversible (3 fases, sin pérdida de datos)
+## 4. Migración legacy — blocker de despliegue (NO IMPLEMENTADA)
 
-### Fase 1 — Despliegue de app cliente (100 % compatible y reversible)
-- Publicar la actualización de Android con soporte dual (lee `/members/{uid}` + fallback `memberIds`).
-- Cuando un miembro existente abre su grupo legacy (`QUEDA-2026`, etc.), la app ejecuta **self-backfill perezoso e idempotente** (`backfillLegacyMembershipIfNeeded`): crea su propio `/groups/{groupId}/members/{uid}` con su rol exacto (`OWNER` si `createdBy == uid`, `MEMBER` en caso contrario), **sin modificar ni borrar `groupId`, `outings`, `chat_messages` ni `stories`**.
-- **Rollback de Fase 1:** Trivial — los documentos `/members/{uid}` no rompen clientes antiguos y los campos legacy en `/groups/{groupId}` siguen intactos.
+El plan anterior de self-backfill desde el cliente **no puede arrancar sobre un grupo legacy real que carezca de `generationId` y registro**. Las reglas actuales exigen que `isCurrentGroupGeneration()` ya sea verdadero antes de permitir la creación del documento `/groups/{groupId}/members/{uid}`; por tanto, el cliente no puede crear por sí mismo el estado que necesita para pasar esa comprobación. La prueba de backfill legacy del emulador prepara previamente esos campos, así que no valida el caso de producción sin registro/generación. No se debe desplegar estas reglas esperando que los clientes completen ese backfill.
 
-### Fase 2 — Despliegue de `firestore.rules` (cierra la puerta de autounión por `groupId`)
-- Verificar que los usuarios activos ya usan la app actualizada.
-- Desplegar `firestore.rules`. A partir de aquí:
-  - Ningún no-miembro puede leer `/groups/{groupId}` ni autounirse con `groupId`.
-  - Los dueños de grupos legacy (`createdBy == uid`) ya pueden emitir tokens de alta entropía (`INV-…`) para su mismo `groupId` legacy sin migrar salidas/chat/historias.
-  - Los miembros legacy aún pendientes siguen pudiendo leer sus datos y completar su self-backfill.
-- **Rollback de Fase 2:** Revertir `firestore.rules` (solo si fuese necesario en emergencia, sabiendo que reabriría la vulnerabilidad).
+**Estado:** no existe todavía un migrador privilegiado verificado para los grupos legacy reales. Mientras siga pendiente, no desplegar `firestore.rules` ni dar por resuelta la migración. No se han migrado, borrado ni reescrito datos de producción.
 
-### Fase 3 — Retirada del fallback `memberIds` (cierre definitivo)
-- Tras confirmar que todos los grupos legacy activos tienen poblada su subcolección `/groups/{groupId}/members/{uid}`:
-  - Eliminar el fallback `isLegacyGroupMember()` de `firestore.rules` y opcionalmente limpiar `memberIds`/`memberNames`/`inviteCode` obsoletos mediante script de backfill con copia de seguridad previa.
+### Trabajo obligatorio antes de cualquier despliegue
+1. **Inventario solo lectura y respaldo:** listar grupos legacy/v2, generaciones y registros existentes, miembros, invitaciones y documentos descendientes; identificar campos ausentes, huérfanos, timestamps y posibles colisiones. Para cada RSVP, cotejar la ruta `/outings/{outingId}/rsvps/{uid}` con `outingId`, `userId`, grupo/generación y el documento padre; aislar para reconciliación los RSVPs huérfanos o inconsistentes y nunca etiquetarlos automáticamente con la generación activa. Guardar un export verificable antes de cualquier escritura.
+2. **Diseñar un migrador privilegiado e idempotente:** usar una vía autorizada de servidor/Admin SDK para asignar la generación y registro que requieren las reglas y crear membresías a partir de datos verificados. Preservar IDs, `createdAt` y contenido existente; no inferir roles ni sobrescribir campos sin reconciliar conflictos. El cliente no puede sustituir este paso.
+3. **Preflight y ensayo:** ejecutar primero un modo de solo lectura/dry-run y luego probar el migrador en una copia de datos. Incluir fixtures legacy sin generación ni registro, con miembros faltantes, documentos huérfanos, timestamps antiguos y reintentos. Comparar recuentos y probar lecturas/escrituras permitidas y denegadas con las reglas exactas.
+4. **Corte controlado:** definir copia de seguridad, ventana de ejecución, reconciliación, criterios de éxito y rollback antes de tocar datos reales. Solo tras verificar el backfill completo se puede evaluar el despliegue de reglas y la retirada posterior del fallback `memberIds`.
+
+La migración y el despliegue quedan fuera de esta rama. Cualquier regla que deje fuera a grupos legacy sin backfill válido es fail-closed de forma intencional; no debe “arreglarse” abriendo de nuevo la lectura o la auto-unión por `groupId`.
 
 ---
 

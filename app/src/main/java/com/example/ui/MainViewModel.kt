@@ -14,13 +14,18 @@ import com.example.data.DataOrigin
 import com.example.data.FavoriteVerse
 import com.example.data.GeminiClient
 import com.example.data.GroupChatMessage
+import com.example.data.GroupFeedState
+import com.example.data.GroupFeedStatus
 import com.example.data.GroupInvite
 import com.example.data.GroupInviteCrypto
 import com.example.data.GroupMember
+import com.example.data.GroupPost
 import com.example.data.GroupRole
+import com.example.data.belongsToActiveGroup
 import com.example.data.InviteRedemptionOutcome
 import com.example.data.NotificationHelper
 import com.example.data.Outing
+import com.example.data.OutingRsvp
 import com.example.data.OutingStatus
 import com.example.data.OutingStory
 import com.example.data.RecentChapter
@@ -39,6 +44,7 @@ import com.example.ui.theme.ThemeMode
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -92,7 +98,7 @@ class MainViewModel(
 
     // --- Two Worlds Switcher State ---
     val currentWorld = MutableStateFlow(AppWorld.WORLD_1_SOCIAL)
-    val world1Tab = MutableStateFlow("profile") // "profile", "outings", "map", "chat", "games"
+    val world1Tab = MutableStateFlow("profile") // "profile", "feed", "outings", "map", "chat", "games"
     val world2ActiveTab = MutableStateFlow("library")
     val showSettingsModal = MutableStateFlow(false)
     val showSocialAgentModal = MutableStateFlow(false)
@@ -113,6 +119,8 @@ class MainViewModel(
     val activeSocialGroup = MutableStateFlow<SocialGroup?>(null)
     val activeGroupMembers = MutableStateFlow<List<GroupMember>>(emptyList())
     val activeGroupInvites = MutableStateFlow<List<GroupInvite>>(emptyList())
+    val groupOutingRsvpState = MutableStateFlow<CloudLoadState>(CloudLoadState.GuestDemo)
+    val groupFeedState = MutableStateFlow(GroupFeedState())
     val currentGroupRole = MutableStateFlow<GroupRole?>(null)
     val inviteActionFeedback = MutableStateFlow<String?>(null)
     val isInviteActionBusy = MutableStateFlow(false)
@@ -125,9 +133,16 @@ class MainViewModel(
     private var membersJob: Job? = null
     private var invitesJob: Job? = null
     private var outingsJob: Job? = null
+    private var groupOutingRsvpsJob: Job? = null
     private var chatJob: Job? = null
     private var storiesJob: Job? = null
+    private var groupFeedJob: Job? = null
+    private var groupFeedObservedScope: String? = null
+    private var groupOutingRsvpObservedScope: String? = null
+    private var groupOutingRsvpCachedScope: String? = null
     private var observedGroupId: String? = null
+    private var groupOutingsBase: List<Outing> = emptyList()
+    private var groupOutingRsvpResponses: List<OutingRsvp> = emptyList()
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         val user = firebaseAuth.currentUser
@@ -581,6 +596,7 @@ class MainViewModel(
     ) {
         stopCloudObservers()
         observedGroupId = null
+        groupOutingRsvpState.value = CloudLoadState.Loading
         activeSocialGroup.value = null
         activeGroupMembers.value = emptyList()
         activeGroupInvites.value = emptyList()
@@ -588,6 +604,7 @@ class MainViewModel(
         inviteActionFeedback.value = null
         isInviteActionBusy.value = false
         selectedOutingForDetail.value = null
+        outings.value = emptyList()
 
         // Immediately discard all Guest Demo data so fictional items are never shown or written as real.
         userProfile.value = SocialSessionPolicy.buildCleanRealUserProfile(
@@ -615,6 +632,7 @@ class MainViewModel(
         isInviteActionBusy.value = false
         observedGroupId = null
         selectedOutingForDetail.value = null
+        groupOutingRsvpState.value = CloudLoadState.GuestDemo
         userProfile.value = defaultGuestProfile
         groupMembers.value = defaultGuestMembers
         outings.value = defaultOutings
@@ -639,6 +657,7 @@ class MainViewModel(
     // --- Cloud Realtime Observers (Read-Only on Sign-In, Zero Fictional Auto-Seeding) ---
     private fun startCloudObservers(uid: String) {
         val repo = socialRepository
+        groupOutingRsvpState.value = CloudLoadState.Loading
         if (repo == null) {
             val unavailableErr = CloudLoadState.Error(
                 message = "Firebase Firestore no está inicializado en esta compilación.",
@@ -652,6 +671,7 @@ class MainViewModel(
                 chatState = unavailableErr,
                 storiesState = unavailableErr
             )
+            groupOutingRsvpState.value = unavailableErr
             return
         }
         stopCloudObservers()
@@ -681,6 +701,12 @@ class MainViewModel(
                             CloudLoadState.Error(err.message, hasCachedRealData = stories.value.isNotEmpty())
                         } else cur.storiesState
                     )
+                    if (groupOutingRsvpState.value is CloudLoadState.Loading) {
+                        groupOutingRsvpState.value = CloudLoadState.Error(
+                            message = err.message,
+                            hasCachedRealData = false
+                        )
+                    }
                     authStatusMessage.value = err.message
                 }
                 .collect { remoteProfile ->
@@ -713,6 +739,8 @@ class MainViewModel(
 
     private fun startPersonalScopedObservers(uid: String) {
         val repo = socialRepository ?: return
+        resetGroupOutingRsvpObserver()
+        groupOutingRsvpState.value = CloudLoadState.Loaded
         observedGroupId = PERSONAL_SCOPE_SENTINEL
         groupJob?.cancel()
         membersJob?.cancel()
@@ -720,15 +748,21 @@ class MainViewModel(
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
         groupJob = null
         membersJob = null
         invitesJob = null
+        groupFeedJob = null
+        groupFeedObservedScope = null
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
 
         activeSocialGroup.value = null
         activeGroupMembers.value = emptyList()
         activeGroupInvites.value = emptyList()
         currentGroupRole.value = null
         groupMembers.value = emptyList()
+        outings.value = emptyList()
+        selectedOutingForDetail.value = null
         socialSyncState.value = socialSyncState.value.copy(
             origin = DataOrigin.CLOUD_REAL,
             groupState = CloudLoadState.Loaded,
@@ -795,6 +829,8 @@ class MainViewModel(
 
     private fun startGroupScopedObservers(uid: String, groupId: String, profile: UserProfile) {
         val repo = socialRepository ?: return
+        resetGroupOutingRsvpObserver()
+        groupOutingRsvpState.value = CloudLoadState.Loading
         observedGroupId = groupId
         groupJob?.cancel()
         membersJob?.cancel()
@@ -802,11 +838,18 @@ class MainViewModel(
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
         invitesJob = null
+        groupFeedJob = null
+        groupFeedObservedScope = null
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.LOADING)
 
+        activeSocialGroup.value = null
         activeGroupMembers.value = emptyList()
         activeGroupInvites.value = emptyList()
         currentGroupRole.value = null
+        outings.value = emptyList()
+        selectedOutingForDetail.value = null
 
         socialSyncState.value = socialSyncState.value.copy(
             origin = DataOrigin.CLOUD_REAL,
@@ -820,13 +863,20 @@ class MainViewModel(
             repo.observeGroup(groupId)
                 .catch { e ->
                     Log.w("MainViewModel", "Group observer error: ${e.message}")
-                    val err = SocialSessionPolicy.resolveErrorState(
-                        scopeLabel = "el grupo",
-                        throwable = e,
-                        currentOrigin = socialSyncState.value.origin,
-                        currentItemCount = groupMembers.value.size
-                    )
-                    socialSyncState.value = socialSyncState.value.copy(groupState = err)
+                    if (isCurrentGroupFeedScope(uid, groupId)) {
+                        groupFeedState.value = GroupFeedState(
+                            status = GroupFeedStatus.ERROR,
+                            message = "No se pudo verificar el acceso al feed del grupo."
+                        )
+                    }
+                        val err = SocialSessionPolicy.resolveErrorState(
+                            scopeLabel = "el grupo",
+                            throwable = e,
+                            currentOrigin = socialSyncState.value.origin,
+                            currentItemCount = groupMembers.value.size
+                        )
+                        socialSyncState.value = socialSyncState.value.copy(groupState = err)
+                        failGroupOutingRsvpObserver("No se pudo verificar el acceso al grupo para cargar las respuestas.")
                 }
                 .collect { remoteGroup ->
                     activeSocialGroup.value = remoteGroup
@@ -835,6 +885,7 @@ class MainViewModel(
                             userProfile.value = userProfile.value.copy(groupName = remoteGroup.name)
                         }
                         refreshDerivedGroupState(uid, remoteGroup, activeGroupMembers.value)
+                        ensureGroupOutingRsvpObserver(uid, groupId, remoteGroup)
                         // Reversible self-backfill for ALREADY-EXISTING legacy memberIds members
                         if (remoteGroup.memberIds.contains(uid) &&
                             activeGroupMembers.value.none { it.userId == uid }
@@ -850,6 +901,15 @@ class MainViewModel(
                     } else {
                         groupMembers.value = emptyList()
                         currentGroupRole.value = null
+                        activeGroupMembers.value = emptyList()
+                        failGroupOutingRsvpObserver("No se pudo verificar la generación del grupo para las respuestas.")
+                        groupFeedJob?.cancel()
+                        groupFeedJob = null
+                        groupFeedObservedScope = null
+                        groupFeedState.value = GroupFeedState(
+                            status = GroupFeedStatus.ERROR,
+                            message = "No tienes acceso al feed de este grupo."
+                        )
                         ensureInvitesObserver(groupId, canManage = false)
                     }
                     socialSyncState.value = socialSyncState.value.copy(groupState = CloudLoadState.Loaded)
@@ -860,10 +920,22 @@ class MainViewModel(
             repo.observeGroupMembers(groupId)
                 .catch { e ->
                     Log.w("MainViewModel", "Group members observer error: ${e.message}")
+                    if (isCurrentGroupFeedScope(uid, groupId)) {
+                        val message = SocialSessionPolicy.formatLoadErrorMessage(
+                            scopeLabel = "la membresía de este grupo",
+                            throwable = e
+                        )
+                        groupFeedState.value = GroupFeedState(
+                            status = GroupFeedStatus.ERROR,
+                            message = message
+                        )
+                    }
+                    failGroupOutingRsvpObserver("No se pudo verificar tu membresía para responder a las salidas.")
                 }
                 .collect { v2Members ->
                     activeGroupMembers.value = v2Members
                     refreshDerivedGroupState(uid, activeSocialGroup.value, v2Members)
+                    ensureGroupOutingRsvpObserver(uid, groupId, activeSocialGroup.value)
                 }
         }
 
@@ -882,7 +954,9 @@ class MainViewModel(
                 }
                 .collect { remoteOutings ->
                     // Real accounts NEVER auto-seed fictional demo outings into Firestore.
-                    outings.value = remoteOutings
+                    groupOutingsBase = remoteOutings
+                    applyGroupOutingRsvpOverlay()
+                    ensureGroupOutingRsvpObserver(uid, groupId, activeSocialGroup.value)
                     socialSyncState.value = socialSyncState.value.copy(outingsState = CloudLoadState.Loaded)
                 }
         }
@@ -963,6 +1037,87 @@ class MainViewModel(
         val activeGid = group?.id?.ifBlank { observedGroupId.orEmpty() } ?: observedGroupId.orEmpty()
         if (activeGid.isNotBlank() && activeGid != PERSONAL_SCOPE_SENTINEL) {
             ensureInvitesObserver(activeGid, canManage = resolvedRole?.canManageInvites == true)
+            ensureGroupFeedObserver(uid, activeGid)
+        }
+    }
+
+    private fun isCurrentGroupFeedScope(uid: String, groupId: String, generationId: String? = null): Boolean {
+        return uid.isNotBlank() && groupId.isNotBlank() &&
+            currentUserId.value == uid &&
+            socialSyncState.value.origin == DataOrigin.CLOUD_REAL &&
+            observedGroupId == groupId &&
+            (generationId == null || activeSocialGroup.value?.let {
+                it.id == groupId && it.generationId == generationId
+            } == true)
+    }
+
+    private fun ensureGroupFeedObserver(uid: String, groupId: String) {
+        val generationId = activeSocialGroup.value
+            ?.takeIf { it.id == groupId }
+            ?.generationId
+            .orEmpty()
+        if (!generationId.matches(Regex("^[a-f0-9]{32}$"))) {
+            groupFeedJob?.cancel()
+            groupFeedJob = null
+            groupFeedObservedScope = null
+            groupFeedState.value = GroupFeedState(
+                status = GroupFeedStatus.ERROR,
+                message = "No se pudo verificar la generación del grupo para abrir el feed."
+            )
+            return
+        }
+        if (!isCurrentGroupFeedScope(uid, groupId, generationId)) return
+        val membership = activeGroupMembers.value.firstOrNull {
+            it.userId == uid && it.groupId == groupId && it.groupGenerationId == generationId
+        }
+        if (membership == null) {
+            groupFeedJob?.cancel()
+            groupFeedJob = null
+            groupFeedObservedScope = null
+            groupFeedState.value = GroupFeedState(
+                status = GroupFeedStatus.ERROR,
+                message = "Tu membresía todavía no está confirmada para este feed privado."
+            )
+            return
+        }
+
+        val scope = "$uid::$groupId::$generationId"
+        if (groupFeedObservedScope == scope && groupFeedJob?.isActive == true) return
+        val repo = socialRepository ?: run {
+            groupFeedState.value = GroupFeedState(
+                status = GroupFeedStatus.ERROR,
+                message = "Firebase no está disponible en esta compilación."
+            )
+            return
+        }
+        groupFeedJob?.cancel()
+        groupFeedObservedScope = scope
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.LOADING)
+        groupFeedJob = viewModelScope.launch {
+            repo.observeGroupPosts(groupId)
+                .catch { e ->
+                    if (!isCurrentGroupFeedScope(uid, groupId, generationId)) return@catch
+                    Log.w("MainViewModel", "Group feed observer error: ${e.message}")
+                    groupFeedObservedScope = null
+                    groupFeedState.value = GroupFeedState(
+                        status = GroupFeedStatus.ERROR,
+                        message = "No se pudo cargar el feed privado del grupo. Comprueba tu acceso y vuelve a actualizar."
+                    )
+                }
+                .collect { posts ->
+                    val stillMember = activeGroupMembers.value.any {
+                        it.userId == uid && it.groupId == groupId && it.groupGenerationId == generationId
+                    }
+                    if (!isCurrentGroupFeedScope(uid, groupId, generationId) || !stillMember) return@collect
+                    val currentGenerationPosts = posts.filter {
+                        it.belongsToGeneration(groupId, generationId)
+                    }
+                    groupFeedState.value = groupFeedState.value.copy(
+                        status = if (currentGenerationPosts.isEmpty()) GroupFeedStatus.EMPTY else GroupFeedStatus.READY,
+                        posts = currentGenerationPosts,
+                        message = null
+                    )
+                }
         }
     }
 
@@ -982,11 +1137,170 @@ class MainViewModel(
                 }
                 .collect { invites ->
                     activeGroupInvites.value = invites
+            }
+        }
+    }
+
+    private fun ensureGroupOutingRsvpObserver(uid: String, groupId: String, group: SocialGroup?) {
+        val currentGroup = group?.takeIf { it.id == groupId }
+        val generationId = currentGroup?.generationId.orEmpty()
+        if (currentGroup == null || !generationId.matches(Regex("^[a-f0-9]{32}$"))) {
+            failGroupOutingRsvpObserver(
+                "No se puede verificar la generación actual del grupo. Las respuestas requieren una migración segura."
+            )
+            return
+        }
+        if (!isCurrentGroupFeedScope(uid, groupId, generationId)) return
+
+        val hasCurrentV2Membership = activeGroupMembers.value.any {
+            it.userId == uid && it.groupId == groupId && it.groupGenerationId == generationId
+        }
+        if (!hasCurrentV2Membership) {
+            failGroupOutingRsvpObserver(
+                "Tu membresía v2 aún no está verificada. No se mostrarán ni guardarán respuestas hasta confirmar el acceso seguro al grupo."
+            )
+            return
+        }
+        val currentMemberIds = activeGroupMembers.value
+            .filter { it.groupId == groupId && it.groupGenerationId == generationId }
+            .map { it.userId }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+
+        val repo = socialRepository ?: run {
+            failGroupOutingRsvpObserver("Firebase no está disponible para cargar las respuestas del grupo.")
+            return
+        }
+        val scope = "$uid::$groupId::$generationId::${currentMemberIds.joinToString("|")}"
+        if (groupOutingRsvpObservedScope == scope && groupOutingRsvpsJob?.isActive == true) return
+
+        groupOutingRsvpsJob?.cancel()
+        groupOutingRsvpObservedScope = scope
+        if (groupOutingRsvpCachedScope != scope) {
+            groupOutingRsvpResponses = emptyList()
+            groupOutingRsvpCachedScope = null
+        }
+        groupOutingRsvpState.value = CloudLoadState.Loading
+        applyGroupOutingRsvpOverlay()
+        groupOutingRsvpsJob = viewModelScope.launch {
+            repo.observeGroupOutingRsvps(groupId, generationId, currentMemberIds)
+                .catch { e ->
+                    if (!isCurrentGroupFeedScope(uid, groupId, generationId)) return@catch
+                    if (!isCurrentGroupRsvpScope(uid, groupId, generationId)) {
+                        failGroupOutingRsvpObserver(
+                            "Tu membresía v2 ya no está confirmada; las respuestas se han ocultado."
+                        )
+                        return@catch
+                    }
+                    Log.w("MainViewModel", "Group outing RSVP observer error: ${e.message}")
+                    val message = SocialSessionPolicy.formatLoadErrorMessage(
+                        scopeLabel = "las respuestas de asistencia del grupo",
+                        throwable = e
+                    )
+                    val keepCachedSnapshot = SocialSessionPolicy.shouldRetainCachedGroupRsvpSnapshot(
+                        scopeIsStillAuthorized = isCurrentGroupRsvpScope(uid, groupId, generationId),
+                        failureIsTransient = isTransientGroupRsvpFailure(e)
+                    )
+                    if (keepCachedSnapshot) {
+                        groupOutingRsvpObservedScope = null
+                        groupOutingRsvpState.value = CloudLoadState.Error(
+                            message = message,
+                            hasCachedRealData = groupOutingRsvpCachedScope == scope
+                        )
+                    } else {
+                        failGroupOutingRsvpObserver(message)
+                    }
+                }
+                .collect { responses ->
+                    if (!isCurrentGroupRsvpScope(uid, groupId, generationId)) return@collect
+                    groupOutingRsvpResponses = responses
+                    groupOutingRsvpCachedScope = scope
+                    groupOutingRsvpState.value = CloudLoadState.Loaded
+                    applyGroupOutingRsvpOverlay()
                 }
         }
     }
 
+    private fun isCurrentGroupRsvpScope(uid: String, groupId: String, generationId: String): Boolean {
+        return isCurrentGroupFeedScope(uid, groupId, generationId) &&
+            activeGroupMembers.value.any {
+                it.userId == uid && it.groupId == groupId && it.groupGenerationId == generationId
+            }
+    }
+
+    private fun applyGroupOutingRsvpOverlay() {
+        val group = activeSocialGroup.value ?: return
+        val groupId = group.id
+        val generationId = group.generationId
+        if (!generationId.matches(Regex("^[a-f0-9]{32}$"))) return
+
+        val currentMemberIds = activeGroupMembers.value
+            .filter { it.groupId == groupId && it.groupGenerationId == generationId }
+            .map { it.userId }
+            .toSet()
+        val responsesByOuting = groupOutingRsvpResponses
+            .filter { it.userId in currentMemberIds && it.belongsToCurrentGroup(groupId, generationId) }
+            .groupBy { it.outingId }
+        val uid = currentUserId.value
+        val updated = groupOutingsBase.map { outing ->
+            if (outing.groupId != groupId || outing.groupGenerationId != generationId) {
+                outing
+            } else {
+                val responses = responsesByOuting[outing.id].orEmpty()
+                outing.copy(
+                    rsvpYesCount = responses.count { it.rsvpChoice == RsvpChoice.YES }.toLong(),
+                    rsvpMaybeCount = responses.count { it.rsvpChoice == RsvpChoice.MAYBE }.toLong(),
+                    rsvpNoCount = responses.count { it.rsvpChoice == RsvpChoice.NO }.toLong(),
+                    myRsvp = responses.firstOrNull { it.userId == uid }?.choice ?: RsvpChoice.NONE.name,
+                    rsvpByUser = emptyMap()
+                )
+            }
+        }.sortedBy { it.dateIso + " " + it.time }
+        outings.value = updated
+        selectedOutingForDetail.value = selectedOutingForDetail.value?.let { selected ->
+            updated.firstOrNull { it.id == selected.id } ?: selected
+        }
+    }
+
+    private fun failGroupOutingRsvpObserver(message: String) {
+        groupOutingRsvpsJob?.cancel()
+        groupOutingRsvpsJob = null
+        groupOutingRsvpObservedScope = null
+        groupOutingRsvpCachedScope = null
+        groupOutingRsvpResponses = emptyList()
+        groupOutingRsvpState.value = CloudLoadState.Error(message, hasCachedRealData = false)
+        applyGroupOutingRsvpOverlay()
+    }
+
+    private fun resetGroupOutingRsvpObserver() {
+        groupOutingRsvpsJob?.cancel()
+        groupOutingRsvpsJob = null
+        groupOutingRsvpObservedScope = null
+        groupOutingRsvpCachedScope = null
+        groupOutingsBase = emptyList()
+        groupOutingRsvpResponses = emptyList()
+    }
+
+    private fun findRsvpFirestoreException(error: Throwable): FirebaseFirestoreException? {
+        return generateSequence(error as Throwable?) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+    }
+
+    private fun isTransientGroupRsvpFailure(error: Throwable): Boolean {
+        return findRsvpFirestoreException(error)?.code in setOf(
+            FirebaseFirestoreException.Code.UNAVAILABLE,
+            FirebaseFirestoreException.Code.DEADLINE_EXCEEDED,
+            FirebaseFirestoreException.Code.ABORTED,
+            FirebaseFirestoreException.Code.RESOURCE_EXHAUSTED,
+            FirebaseFirestoreException.Code.INTERNAL,
+            FirebaseFirestoreException.Code.UNKNOWN
+        )
+    }
+
     private fun stopCloudObservers() {
+        resetGroupOutingRsvpObserver()
         profileJob?.cancel()
         groupJob?.cancel()
         membersJob?.cancel()
@@ -994,6 +1308,7 @@ class MainViewModel(
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
         profileJob = null
         groupJob = null
         membersJob = null
@@ -1001,6 +1316,9 @@ class MainViewModel(
         outingsJob = null
         chatJob = null
         storiesJob = null
+        groupFeedJob = null
+        groupFeedObservedScope = null
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
     }
 
     // --- World Switching & Navigation ---
@@ -1419,6 +1737,42 @@ class MainViewModel(
 
     fun updateOutingRsvp(outingId: String, choice: RsvpChoice) {
         val target = outings.value.firstOrNull { it.id == outingId } ?: return
+        if (!target.groupId.startsWith("personal_") && !socialSyncState.value.isGuestDemo) {
+            val uid = currentUserId.value ?: return
+            val group = activeSocialGroup.value
+            val generationId = target.groupGenerationId
+            if (group?.id != target.groupId || group.generationId != generationId ||
+                groupOutingRsvpState.value !is CloudLoadState.Loaded ||
+                !isCurrentGroupRsvpScope(uid, target.groupId, generationId)
+            ) {
+                val message = (groupOutingRsvpState.value as? CloudLoadState.Error)?.message
+                    ?: "Tu acceso v2 al grupo aún no está verificado; no se ha guardado ninguna respuesta."
+                authStatusMessage.value = message
+                return
+            }
+            val repo = socialRepository ?: return
+            playFeedbackSound(false)
+            viewModelScope.launch {
+                repo.updateGroupOutingRsvpTransactional(
+                    outingId = outingId,
+                    groupId = target.groupId,
+                    groupGenerationId = generationId,
+                    choice = choice,
+                    userId = uid
+                ).onFailure { err ->
+                    val message = "No se pudo guardar tu respuesta: ${err.localizedMessage ?: "comprueba tu acceso y conexión"}"
+                    if (isCurrentGroupFeedScope(uid, target.groupId, generationId) &&
+                        (!isCurrentGroupRsvpScope(uid, target.groupId, generationId) ||
+                            findRsvpFirestoreException(err)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED)
+                    ) {
+                        failGroupOutingRsvpObserver(message)
+                    }
+                    authStatusMessage.value = message
+                }
+            }
+            return
+        }
+
         val uid = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
 
         val updatedMap = target.rsvpByUser.toMutableMap()
@@ -1515,6 +1869,12 @@ class MainViewModel(
     }
 
     fun deleteOuting(outingId: String) {
+        val target = outings.value.firstOrNull { it.id == outingId } ?: return
+        if (!socialSyncState.value.isGuestDemo && !target.groupId.startsWith("personal_")) {
+            authStatusMessage.value =
+                "Las salidas grupales no se borran para conservar sus respuestas; márcala como cancelada."
+            return
+        }
         outings.value = outings.value.filterNot { it.id == outingId }
         val uid = currentUserId.value
         val repo = socialRepository
@@ -1522,6 +1882,137 @@ class MainViewModel(
             viewModelScope.launch {
                 repo.deleteOuting(outingId).onFailure { err ->
                     authStatusMessage.value = "Error al eliminar la salida: ${err.localizedMessage}"
+                }
+            }
+        }
+    }
+
+    // --- World 1: Private group feed ---
+    fun visibleGroupFeedPosts(posts: List<GroupPost>): List<GroupPost> {
+        val uid = currentUserId.value ?: return emptyList()
+        val group = activeSocialGroup.value ?: return emptyList()
+        val generationId = group.generationId
+        val isV2Member = activeGroupMembers.value.any {
+            it.userId == uid && it.groupId == group.id && it.groupGenerationId == generationId
+        }
+        if (!isV2Member || !isCurrentGroupFeedScope(uid, group.id, generationId)) return emptyList()
+        return posts.filter { it.belongsToGeneration(group.id, generationId) }
+    }
+
+    fun retryGroupFeed() {
+        val uid = currentUserId.value ?: return
+        val groupId = activeSocialGroup.value?.id ?: return
+        if (!isCurrentGroupFeedScope(uid, groupId)) return
+        groupFeedJob?.cancel()
+        groupFeedJob = null
+        groupFeedObservedScope = null
+        ensureGroupFeedObserver(uid, groupId)
+    }
+
+    fun retryGroupOutingRsvps() {
+        val uid = currentUserId.value ?: return
+        val group = activeSocialGroup.value ?: return
+        val generationId = group.generationId
+        if (!isCurrentGroupRsvpScope(uid, group.id, generationId)) {
+            failGroupOutingRsvpObserver(
+                "Tu membresía v2 ya no está confirmada; las respuestas se han ocultado."
+            )
+            return
+        }
+        groupOutingRsvpsJob?.cancel()
+        groupOutingRsvpsJob = null
+        groupOutingRsvpObservedScope = null
+        ensureGroupOutingRsvpObserver(uid, group.id, group)
+    }
+
+    fun createGroupPost(text: String) {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        val group = activeSocialGroup.value
+        val cleanText = text.trim().take(2000)
+        if (uid.isNullOrBlank() || repo == null || group == null) {
+            groupFeedState.value = groupFeedState.value.copy(
+                status = GroupFeedStatus.ERROR,
+                message = "Inicia sesión y entra en un grupo para publicar."
+            )
+            return
+        }
+        if (cleanText.isBlank()) return
+        if (groupFeedState.value.isPublishing) return
+        val membership = activeGroupMembers.value.firstOrNull {
+            it.belongsToActiveGroup(uid, group)
+        }
+        if (membership == null || !isCurrentGroupFeedScope(uid, group.id)) {
+            groupFeedState.value = groupFeedState.value.copy(
+                status = GroupFeedStatus.ERROR,
+                message = "Tu membresía todavía no está confirmada para publicar en este grupo."
+            )
+            return
+        }
+
+        val groupId = group.id
+        val authorName = membership.displayName.trim().ifBlank { "Miembro" }
+        groupFeedState.value = groupFeedState.value.copy(
+            isPublishing = true,
+            message = null,
+            actionMessage = null
+        )
+        viewModelScope.launch {
+            repo.createGroupPost(
+                GroupPost(
+                    authorId = uid,
+                    authorName = authorName,
+                    groupId = groupId,
+                    text = cleanText
+                ),
+                uid
+            ).onSuccess {
+                if (isCurrentGroupFeedScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        isPublishing = false,
+                        actionMessage = null,
+                        publishSuccessToken = groupFeedState.value.publishSuccessToken + 1,
+                        publishSuccessGroupId = groupId
+                    )
+                }
+            }.onFailure { err ->
+                if (isCurrentGroupFeedScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        isPublishing = false,
+                        actionMessage = "No se pudo publicar: ${err.localizedMessage ?: "revisa tu conexión y acceso"}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteGroupPost(postId: String) {
+        val uid = currentUserId.value ?: return
+        val group = activeSocialGroup.value ?: return
+        val post = groupFeedState.value.posts.firstOrNull { it.id == postId } ?: return
+        val isV2Member = activeGroupMembers.value.any { it.belongsToActiveGroup(uid, group) }
+        if (post.authorId != uid || post.groupId != group.id || !isV2Member ||
+            !isCurrentGroupFeedScope(uid, group.id) || postId in groupFeedState.value.deletingPostIds
+        ) return
+        val repo = socialRepository ?: return
+        groupFeedState.value = groupFeedState.value.copy(
+            deletingPostIds = groupFeedState.value.deletingPostIds + postId,
+            actionMessage = null
+        )
+        viewModelScope.launch {
+            repo.deleteGroupPost(postId, group.id, uid).onSuccess {
+                if (isCurrentGroupFeedScope(uid, group.id)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        deletingPostIds = groupFeedState.value.deletingPostIds - postId,
+                        actionMessage = null
+                    )
+                }
+            }.onFailure { err ->
+                if (isCurrentGroupFeedScope(uid, group.id)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        deletingPostIds = groupFeedState.value.deletingPostIds - postId,
+                        actionMessage = "No se pudo borrar la publicación: ${err.localizedMessage ?: "permiso denegado"}"
+                    )
                 }
             }
         }
@@ -1535,7 +2026,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value),
             text = clean,
             messageType = "TEXT"
         )
@@ -1561,7 +2052,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value),
             text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
             audioDurationSec = cleanDur.toLong(),
@@ -1585,7 +2076,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value),
             text = "He compartido la salida '${outing.title}'. ¿Quién se apunta?",
             messageType = "OUTING_SHARE",
             sharedOutingId = outing.id,
@@ -1638,7 +2129,7 @@ class MainViewModel(
             id = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             authorId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             authorName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value),
             caption = caption.ifBlank { "Recuerdo compartido con el grupo" },
             filterStyle = filterStyle,
             mediaUri = mediaUri,

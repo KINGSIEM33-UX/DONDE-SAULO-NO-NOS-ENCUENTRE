@@ -23,12 +23,13 @@ service cloud.firestore {
     }
 
     function isValidGroupRegistry(data, registryId) {
-      return data.keys().hasAll(['groupId', 'createdBy', 'schemaVersion', 'createdAt']) &&
-             data.keys().hasOnly(['groupId', 'createdBy', 'schemaVersion', 'createdAt']) &&
+      return data.keys().hasAll(['groupId', 'createdBy', 'schemaVersion', 'generationId', 'createdAt']) &&
+             data.keys().hasOnly(['groupId', 'createdBy', 'schemaVersion', 'generationId', 'createdAt']) &&
              isV2GroupId(registryId) &&
              data.groupId == registryId &&
              data.createdBy is string && data.createdBy == request.auth.uid &&
              data.schemaVersion == 2 &&
+             data.generationId is string && data.generationId.matches('^[a-f0-9]{32}$') &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
@@ -55,34 +56,117 @@ service cloud.firestore {
              (listVal.size() <= 1 || (listVal[listVal.size() - 1] is string && listVal[listVal.size() - 1].size() <= 500));
     }
 
-    // --- Group Membership & Role Helpers (v2 Subcollection + Legacy v1 Read Fallback) ---
-    function hasV2MemberDoc(groupId, uid) {
+    // Group IDs are generation namespaces: v2 IDs are high-entropy and registry-tombstoned,
+    // while client deletion is closed for legacy groups too. Group-list branches therefore
+    // bind the resource groupId to current membership; app queries also fence createdAt to
+    // omit malformed/imported stale records. Rules cannot prove a dynamic parent timestamp
+    // from a list query, so createdAt is not used as the authorization boundary here.
+    // --- Group Membership & Role Helpers (registry-anchored generations) ---
+    // Legacy/v2 records without a generation registry are deliberately fail-closed.
+    // A trusted migration must stamp the parent, create its immutable registry entry,
+    // and tag each surviving child record before those records become visible again.
+    function hasCurrentGroupRecord(groupId) {
       return isValidId(groupId) &&
-             exists(/databases/$(database)/documents/groups/$(groupId)) &&
-             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.groupId == groupId &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt is timestamp &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt >=
-               get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt;
+             hasCurrentGroupRecordData(groupId);
     }
 
-    function v2MemberRole(groupId, uid) {
-      return get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.role;
+    function hasCurrentGroupRecordData(groupId) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry);
+    }
+
+    function hasCurrentGroupMetadata(groupId, group, registry) {
+      return ('generationId' in group) &&
+             group.generationId is string &&
+             group.generationId.size() == 32 &&
+             registry.groupId == groupId &&
+             registry.generationId == group.generationId;
+    }
+
+    function hasV2MemberDoc(groupId, uid) {
+      return isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+             isCurrentV2MemberData(groupId, uid);
+    }
+
+    function isCurrentV2MemberData(groupId, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      let member = get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             member.groupId == groupId &&
+             member.groupGenerationId == group.generationId &&
+             member.joinedAt is timestamp &&
+             member.joinedAt >= group.createdAt;
+    }
+
+    function hasCurrentV2MemberRole(groupId, uid, allowedRoles) {
+      return isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+             currentV2MemberHasRole(groupId, uid, allowedRoles);
+    }
+
+    function currentV2MemberHasRole(groupId, uid, allowedRoles) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      let member = get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             member.groupId == groupId &&
+             member.groupGenerationId == group.generationId &&
+             member.joinedAt is timestamp &&
+             member.joinedAt >= group.createdAt &&
+             member.role in allowedRoles;
     }
 
     function isLegacyGroupMember(groupId, uid) {
       return isValidId(groupId) &&
-             exists(/databases/$(database)/documents/groups/$(groupId)) &&
-             'memberIds' in get(/databases/$(database)/documents/groups/$(groupId)).data &&
-             get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds is list &&
-             uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+             isLegacyMemberInCurrentGroup(groupId, uid);
+    }
+
+    function isLegacyMemberInCurrentGroup(groupId, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             isLegacyMemberInGroupData(group, uid);
+    }
+
+    function isLegacyMemberInGroupData(group, uid) {
+      return (!('schemaVersion' in group) || group.schemaVersion != 2) &&
+             ('memberIds' in group) && group.memberIds is list && uid in group.memberIds;
     }
 
     function isGroupMember(groupId) {
-      return isSignedIn() && (
-        hasV2MemberDoc(groupId, request.auth.uid) ||
-        isLegacyGroupMember(groupId, request.auth.uid)
-      );
+      return isSignedIn() &&
+             isValidId(groupId) &&
+             (hasV2MemberDoc(groupId, request.auth.uid) ||
+              isLegacyGroupMember(groupId, request.auth.uid));
+    }
+
+    // No generation-less parent is treated as current. The immutable registry is what prevents
+    // a new incarnation of the same groupId from inheriting old descendants.
+    function isCurrentGroupGeneration(groupId, data) {
+      return isValidId(groupId) &&
+             matchesCurrentGroupGeneration(groupId, data);
+    }
+
+    function matchesCurrentGroupGeneration(groupId, data) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             ('groupGenerationId' in data) && data.groupGenerationId == group.generationId;
+    }
+
+    function hasSameOptionalGroupGeneration(incomingData, existingData) {
+      return ((!('groupGenerationId' in incomingData) && !('groupGenerationId' in existingData)) ||
+              (('groupGenerationId' in incomingData) && ('groupGenerationId' in existingData) &&
+               incomingData.groupGenerationId == existingData.groupGenerationId));
+    }
+
+    function hasSameOptionalGenerationId(incomingData, existingData) {
+      return ((!('generationId' in incomingData) && !('generationId' in existingData)) ||
+              (('generationId' in incomingData) && ('generationId' in existingData) &&
+               incomingData.generationId == existingData.generationId));
     }
 
     // Group content belongs to the current parent generation only when its client-supplied
@@ -92,9 +176,51 @@ service cloud.firestore {
       return ('groupId' in data) &&
              ('createdAt' in data) &&
              data.groupId is string &&
-             exists(/databases/$(database)/documents/groups/$(data.groupId)) &&
+             isValidId(data.groupId) &&
+             matchesCurrentGroupContent(data.groupId, data);
+    }
+
+    function matchesCurrentGroupContent(groupId, data) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
              data.createdAt is timestamp &&
-             data.createdAt >= get(/databases/$(database)/documents/groups/$(data.groupId)).data.createdAt;
+             data.createdAt >= group.createdAt &&
+             ('groupGenerationId' in data) &&
+             data.groupGenerationId == group.generationId;
+    }
+
+    function isCurrentGroupMemberContent(data, uid) {
+      return ('groupId' in data) &&
+             ('createdAt' in data) &&
+             data.groupId is string &&
+             isValidId(data.groupId) &&
+             matchesCurrentGroupMemberContent(data.groupId, data, uid);
+    }
+
+    function matchesCurrentGroupMemberContent(groupId, data, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             data.createdAt is timestamp &&
+             data.createdAt >= group.createdAt &&
+             ('groupGenerationId' in data) &&
+             data.groupGenerationId == group.generationId &&
+             (hasCurrentV2MemberInGroup(groupId, uid, group) ||
+              isLegacyMemberInGroupData(group, uid));
+    }
+
+    function hasCurrentV2MemberInGroup(groupId, uid, group) {
+      return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+             isCurrentV2MemberInGroupData(groupId, uid, group);
+    }
+
+    function isCurrentV2MemberInGroupData(groupId, uid, group) {
+      let member = get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data;
+      return member.groupId == groupId &&
+             member.groupGenerationId == group.generationId &&
+             member.joinedAt is timestamp &&
+             member.joinedAt >= group.createdAt;
     }
 
     // Direct ownership remains available for personal content and for a user's own
@@ -106,11 +232,17 @@ service cloud.firestore {
              isValidId(groupId) &&
              exists(/databases/$(database)/documents/groups/$(groupId)) &&
              exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.userId == uid &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.groupId == groupId &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt is timestamp &&
-             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt <
-               get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt;
+             isHistoricalGroupOwnerData(groupId, uid);
+    }
+
+    function isHistoricalGroupOwnerData(groupId, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let member = get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data;
+      return
+             member.userId == uid &&
+             member.groupId == groupId &&
+             member.joinedAt is timestamp &&
+             member.joinedAt < group.createdAt;
     }
 
     function isOwnedOuting(data) {
@@ -119,24 +251,79 @@ service cloud.firestore {
              data.ownerId == request.auth.uid &&
              (
                !exists(/databases/$(database)/documents/groups/$(data.groupId)) ||
-               isCurrentGroupContent(data) ||
                isHistoricalGroupOwner(data.groupId, request.auth.uid)
              );
     }
 
     function isGroupOwner(groupId) {
-      return isSignedIn() && isValidId(groupId) && (
-        (hasV2MemberDoc(groupId, request.auth.uid) && v2MemberRole(groupId, request.auth.uid) == 'OWNER') ||
-        (exists(/databases/$(database)/documents/groups/$(groupId)) &&
-         get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid)
-      );
+      return isSignedIn() &&
+             isValidId(groupId) &&
+             hasCurrentGroupRole(groupId, request.auth.uid, ['OWNER']);
     }
 
     function isGroupAdminOrOwner(groupId) {
-      return isSignedIn() && isValidId(groupId) && (
-        isGroupOwner(groupId) ||
-        (hasV2MemberDoc(groupId, request.auth.uid) && v2MemberRole(groupId, request.auth.uid) in ['OWNER', 'ADMIN'])
-      );
+      return isSignedIn() &&
+             isValidId(groupId) &&
+             hasCurrentGroupRole(groupId, request.auth.uid, ['OWNER', 'ADMIN']);
+    }
+
+    function hasCurrentGroupRole(groupId, uid, allowedRoles) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             hasGroupRoleForGroupData(groupId, uid, allowedRoles, group);
+    }
+
+    function hasGroupRoleForGroupData(groupId, uid, allowedRoles, group) {
+      return (('schemaVersion' in group) && group.schemaVersion == 2 &&
+              exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+              hasCurrentMemberRoleData(groupId, uid, group, allowedRoles)) ||
+             ((!('schemaVersion' in group) || group.schemaVersion != 2) &&
+              isLegacyMemberInGroupData(group, uid) &&
+              group.createdBy == uid && 'OWNER' in allowedRoles);
+    }
+
+    function isCurrentGroupAdminOrOwnerGeneration(groupId, data) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             ('groupGenerationId' in data) &&
+             data.groupGenerationId == group.generationId &&
+             hasGroupRoleForGroupData(groupId, request.auth.uid, ['OWNER', 'ADMIN'], group);
+    }
+
+    function isCurrentInviteGroupNonMember(groupId, inviteData, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             ('groupGenerationId' in inviteData) &&
+             inviteData.groupGenerationId == group.generationId &&
+             inviteData.createdAt is timestamp &&
+             inviteData.createdAt >= group.createdAt &&
+             (
+               (('schemaVersion' in group) && group.schemaVersion == 2 &&
+                !exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid))) ||
+               ((!('schemaVersion' in group) || group.schemaVersion != 2) &&
+                !isLegacyMemberInGroupData(group, uid))
+             );
+    }
+
+    function hasCurrentMemberRoleData(groupId, uid, group, allowedRoles) {
+      let member = get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data;
+      return member.userId == uid &&
+             member.groupId == groupId &&
+             member.groupGenerationId == group.generationId &&
+             member.joinedAt is timestamp &&
+             member.joinedAt >= group.createdAt &&
+             member.role in allowedRoles;
+    }
+
+    function isLegacyGroupOwner(groupId, uid) {
+      let group = get(/databases/$(database)/documents/groups/$(groupId)).data;
+      let registry = get(/databases/$(database)/documents/groups_id_registry/$(groupId)).data;
+      return hasCurrentGroupMetadata(groupId, group, registry) &&
+             isLegacyMemberInGroupData(group, uid) &&
+             group.createdBy == uid;
     }
 
     // A registry entry is an immutable tombstone. It is intentionally not readable
@@ -149,6 +336,7 @@ service cloud.firestore {
                        existsAfter(/databases/$(database)/documents/groups/$(registryId)) &&
                        getAfter(/databases/$(database)/documents/groups/$(registryId)).data.schemaVersion == 2 &&
                        getAfter(/databases/$(database)/documents/groups/$(registryId)).data.createdBy == request.auth.uid &&
+                       getAfter(/databases/$(database)/documents/groups/$(registryId)).data.generationId == incoming().generationId &&
                        getAfter(/databases/$(database)/documents/groups/$(registryId)).data.createdAt == incoming().createdAt &&
                        existsAfter(/databases/$(database)/documents/groups/$(registryId)/members/$(request.auth.uid)) &&
                        getAfter(/databases/$(database)/documents/groups/$(registryId)/members/$(request.auth.uid)).data.role == 'OWNER';
@@ -158,11 +346,18 @@ service cloud.firestore {
     // 0A. SocialGroup Validation Blueprint (v2 decoupled from invite tokens & member arrays)
     function isValidV2Group(data) {
       return data.keys().hasAll(['name', 'createdBy', 'schemaVersion', 'createdAt', 'updatedAt']) &&
-             data.keys().hasOnly(['name', 'createdBy', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['name', 'createdBy', 'schemaVersion', 'generationId', 'createdAt', 'updatedAt']) &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
              data.schemaVersion == 2 &&
+             (!('generationId' in data) ||
+              (data.generationId is string && data.generationId.matches('^[a-f0-9]{32}$'))) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidGroupRename(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -172,23 +367,24 @@ service cloud.firestore {
                'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt'
              ]) &&
              data.keys().hasOnly([
-               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt', 'schemaVersion'
+               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt', 'schemaVersion', 'generationId'
              ]) &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.inviteCode is string && data.inviteCode.size() >= 1 && data.inviteCode.size() <= 32 &&
              data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
              isValidStringList(data.memberIds, 50) &&
              data.memberNames is map && data.memberNames.size() <= 50 &&
+             (!('generationId' in data) ||
+              (data.generationId is string && data.generationId.matches('^[a-f0-9]{32}$'))) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
     // 0B. Per-Member Document Validation (/groups/{groupId}/members/{memberUid})
-    function isValidGroupMember(data, groupId, memberUid) {
-      return data.keys().hasAll(['userId', 'groupId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
-             data.keys().hasOnly(['userId', 'groupId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
-             data.userId is string && data.userId == memberUid &&
+    function isValidGroupMemberFields(data, groupId, memberUid) {
+      return data.userId is string && data.userId == memberUid &&
              data.groupId is string && data.groupId == groupId &&
+             (!('groupGenerationId' in data) || (data.groupGenerationId is string && data.groupGenerationId.size() == 32)) &&
              data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
              data.role is string && data.role in ['OWNER', 'ADMIN', 'MEMBER'] &&
              data.inviteToken is string && data.inviteToken.size() <= 64 &&
@@ -196,21 +392,18 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidGroupMember(data, groupId, memberUid) {
+      return data.keys().hasAll(['userId', 'groupId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
+             data.keys().hasOnly(['userId', 'groupId', 'groupGenerationId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
+             isValidGroupMemberFields(data, groupId, memberUid);
+    }
+
     // 0C. High-Entropy Revocable Invite Validation (/group_invites/{token})
-    function isValidGroupInvite(data, tokenId) {
-      return data.keys().hasAll([
-               'token', 'groupId', 'groupNamePreview', 'createdBy',
-               'revoked', 'expiresAt', 'maxUses', 'useCount',
-               'lastRedeemedBy', 'createdAt', 'updatedAt'
-             ]) &&
-             data.keys().hasOnly([
-               'token', 'groupId', 'groupNamePreview', 'createdBy',
-               'revoked', 'expiresAt', 'maxUses', 'useCount',
-               'lastRedeemedBy', 'createdAt', 'updatedAt'
-             ]) &&
-             isValidInviteTokenId(tokenId) &&
+    function isValidGroupInviteFields(data, tokenId) {
+      return isValidInviteTokenId(tokenId) &&
              data.token is string && data.token == tokenId &&
              isValidId(data.groupId) &&
+             (!('groupGenerationId' in data) || (data.groupGenerationId is string && data.groupGenerationId.size() == 32)) &&
              data.groupNamePreview is string && data.groupNamePreview.size() >= 1 && data.groupNamePreview.size() <= 80 &&
              data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
              data.revoked is bool &&
@@ -222,13 +415,26 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidGroupInvite(data, tokenId) {
+      return data.keys().hasAll([
+               'token', 'groupId', 'groupNamePreview', 'createdBy',
+               'revoked', 'expiresAt', 'maxUses', 'useCount',
+               'lastRedeemedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'token', 'groupId', 'groupGenerationId', 'groupNamePreview', 'createdBy',
+               'revoked', 'expiresAt', 'maxUses', 'useCount',
+               'lastRedeemedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidGroupInviteFields(data, tokenId);
+    }
+
     match /groups/{groupId} {
       // Strictly members-only: knowing groupId leaks ZERO private group data to non-members.
       allow get: if isGroupMember(groupId);
-      allow list: if isSignedIn() && (
-        ('memberIds' in resource.data && request.auth.uid in resource.data.memberIds) ||
-        hasV2MemberDoc(groupId, request.auth.uid)
-      );
+      allow list: if isSignedIn() &&
+                     (isLegacyGroupMember(groupId, request.auth.uid) ||
+                      hasV2MemberDoc(groupId, request.auth.uid));
 
       // New groups must use the v2 namespace, an unused registry slot, and an
       // atomic registry + group + OWNER-member creation. The old /groups/{legacyId}
@@ -236,12 +442,14 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isV2GroupId(groupId) &&
                        isValidV2Group(incoming()) &&
+                       ('generationId' in incoming()) &&
                        incoming().createdBy == request.auth.uid &&
                        !exists(/databases/$(database)/documents/groups/$(groupId)) &&
                        !exists(/databases/$(database)/documents/groups_id_registry/$(groupId)) &&
                        existsAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)) &&
                        getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.groupId == groupId &&
                        getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.createdBy == request.auth.uid &&
+                       getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.generationId == incoming().generationId &&
                        getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.createdAt == incoming().createdAt &&
                        existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)) &&
                        getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.role == 'OWNER';
@@ -250,23 +458,27 @@ service cloud.firestore {
       // Only OWNER/ADMIN can rename; only OWNER can prune legacy memberIds (strict subset, never adding UIDs).
       allow update: if isSignedIn() &&
                        isValidId(groupId) &&
+                       isGroupAdminOrOwner(groupId) &&
                        incoming().createdBy == existing().createdBy &&
                        incoming().createdAt == existing().createdAt &&
-                       (
+                         hasSameOptionalGenerationId(incoming(), existing()) &&
                          (
-                           isValidV2Group(incoming()) &&
-                           isGroupAdminOrOwner(groupId) &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])
-                         ) ||
-                         (
-                           isValidLegacyGroup(incoming()) &&
-                           incoming().inviteCode == existing().inviteCode &&
                            (
-                             (isGroupAdminOrOwner(groupId) &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])) ||
-                             (isGroupOwner(groupId) &&
-                              existing().memberIds.hasAll(incoming().memberIds) &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt']))
+                             ('schemaVersion' in existing()) && existing().schemaVersion == 2 &&
+                             isValidGroupRename(incoming()) &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])
+                           ) ||
+                           (
+                             (!('schemaVersion' in existing()) || existing().schemaVersion != 2) &&
+                             isValidGroupRename(incoming()) &&
+                             incoming().inviteCode == existing().inviteCode &&
+                             (
+                               incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) ||
+                               (isGroupOwner(groupId) &&
+                                isValidStringList(incoming().memberIds, 50) &&
+                                incoming().memberNames is map && incoming().memberNames.size() <= 50 &&
+                                existing().memberIds.toSet().hasAll(incoming().memberIds.toSet()) &&
+                                incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt']))
                            )
                          )
                        );
@@ -281,13 +493,17 @@ service cloud.firestore {
         // A signed-in user may check their own member doc (for atomic idempotent join);
         // non-members get exists=false identically whether groupId exists or not (zero info leak).
         // Reading other members or listing the subcollection strictly requires membership.
-        allow get: if isSignedIn() &&
+      allow get: if isSignedIn() &&
                       isValidId(groupId) &&
                       isValidId(memberUid) &&
                       ((memberUid == request.auth.uid &&
                         !exists(/databases/$(database)/documents/groups/$(groupId)/members/$(memberUid))) ||
-                       isGroupMember(groupId));
-        allow list: if isGroupMember(groupId);
+                       (memberUid == request.auth.uid &&
+                        exists(/databases/$(database)/documents/groups/$(groupId)/members/$(memberUid)) &&
+                        resource.data.userId == request.auth.uid &&
+                        !isCurrentGroupGeneration(groupId, resource.data)) ||
+                       (isGroupMember(groupId) && isCurrentGroupGeneration(groupId, resource.data)));
+        allow list: if isGroupMember(groupId) && isCurrentGroupGeneration(groupId, resource.data);
 
         allow create: if isSignedIn() &&
                          isValidId(groupId) &&
@@ -301,6 +517,7 @@ service cloud.firestore {
                              existsAfter(/databases/$(database)/documents/groups/$(groupId)) &&
                              getAfter(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid &&
                              getAfter(/databases/$(database)/documents/groups/$(groupId)).data.createdAt <= incoming().joinedAt &&
+                             incoming().groupGenerationId == getAfter(/databases/$(database)/documents/groups/$(groupId)).data.generationId &&
                              incoming().role == 'OWNER' &&
                              incoming().inviteToken == ''
                            ) ||
@@ -313,6 +530,8 @@ service cloud.firestore {
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.createdAt >=
                                get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.groupId == groupId &&
+                             isCurrentGroupGeneration(groupId, incoming()) &&
+                             isCurrentGroupGeneration(groupId, get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data) &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.revoked == false &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.expiresAt > request.time &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.useCount <
@@ -324,6 +543,7 @@ service cloud.firestore {
                            // Case 3: Reversible self-backfill for ALREADY-EXISTING legacy memberIds members only
                            (
                              isLegacyGroupMember(groupId, request.auth.uid) &&
+                             isCurrentGroupGeneration(groupId, incoming()) &&
                              incoming().inviteToken == '' &&
                              incoming().role == (
                                get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid
@@ -336,39 +556,53 @@ service cloud.firestore {
         allow update: if isSignedIn() &&
                          isValidId(groupId) &&
                          isValidId(memberUid) &&
-                         isValidGroupMember(incoming(), groupId, memberUid) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt']) &&
+                         isValidGroupMemberFields(incoming(), groupId, memberUid) &&
                          incoming().userId == existing().userId &&
                          incoming().groupId == existing().groupId &&
+                         hasSameOptionalGroupGeneration(incoming(), existing()) &&
                          incoming().inviteToken == existing().inviteToken &&
                          incoming().joinedAt == existing().joinedAt &&
-                         (
-                           // Self-update: displayName only (cannot escalate own role)
                            (
-                             memberUid == request.auth.uid &&
-                             isGroupMember(groupId) &&
-                             incoming().role == existing().role &&
-                             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
-                           ) ||
-                           // Owner role management: promote/demote MEMBER <-> ADMIN (cannot alter OWNER)
-                           (
-                             isGroupOwner(groupId) &&
-                             memberUid != request.auth.uid &&
-                             existing().role != 'OWNER' &&
-                             incoming().role in ['ADMIN', 'MEMBER'] &&
-                             incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])
-                           )
+                             // Self-update: displayName only (cannot escalate own role)
+                             (
+                               memberUid == request.auth.uid &&
+                               incoming().role == existing().role &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) &&
+                               hasV2MemberDoc(groupId, request.auth.uid)
+                             ) ||
+                             // Owner role management: promote/demote MEMBER <-> ADMIN (cannot alter OWNER)
+                             (
+                               memberUid != request.auth.uid &&
+                               existing().role != 'OWNER' &&
+                               incoming().role in ['ADMIN', 'MEMBER'] &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt']) &&
+                               hasV2MemberDoc(groupId, memberUid) &&
+                               isGroupOwner(groupId)
+                             )
                          );
 
         allow delete: if isSignedIn() &&
                          isValidId(groupId) &&
                          isValidId(memberUid) &&
-                         existing().role != 'OWNER' &&
+                         existing().userId == memberUid &&
+                         existing().groupId == groupId &&
                          (
-                           // Self leave (non-owner)
-                           memberUid == request.auth.uid ||
-                           // Owner can remove ADMIN or MEMBER; ADMIN can remove MEMBER only
-                           isGroupOwner(groupId) ||
-                           (isGroupAdminOrOwner(groupId) && existing().role == 'MEMBER')
+                           (
+                             isCurrentGroupGeneration(groupId, existing()) &&
+                             existing().role != 'OWNER' &&
+                             (
+                               // Self leave (non-owner)
+                               memberUid == request.auth.uid ||
+                               // Owner can remove ADMIN or MEMBER; ADMIN can remove MEMBER only.
+                               // Keep this separate from self-leave: managers delete another UID's doc.
+                               (memberUid != request.auth.uid &&
+                                (isGroupOwner(groupId) ||
+                                 (existing().role == 'MEMBER' && isGroupAdminOrOwner(groupId))))
+                             )
+                           ) ||
+                           // The holder may clean up only their own stale membership before rejoining.
+                           (memberUid == request.auth.uid && !isCurrentGroupGeneration(groupId, existing()))
                          );
       }
     }
@@ -379,6 +613,7 @@ service cloud.firestore {
       allow get: if isSignedIn() &&
                     isValidInviteTokenId(token) &&
                     resource != null &&
+                    isCurrentGroupGeneration(resource.data.groupId, resource.data) &&
                       (
                         isGroupAdminOrOwner(resource.data.groupId) ||
                         (
@@ -392,11 +627,14 @@ service cloud.firestore {
                     );
 
       // Only OWNER/ADMIN of a group can list invites belonging to their group (zero global enumeration).
-      allow list: if isSignedIn() && isGroupAdminOrOwner(resource.data.groupId);
+      allow list: if isSignedIn() &&
+                     isGroupAdminOrOwner(resource.data.groupId) &&
+                     isCurrentGroupGeneration(resource.data.groupId, resource.data);
 
       allow create: if isSignedIn() &&
                        isValidGroupInvite(incoming(), token) &&
                        isGroupAdminOrOwner(incoming().groupId) &&
+                       isCurrentGroupGeneration(incoming().groupId, incoming()) &&
                        exists(/databases/$(database)/documents/groups/$(incoming().groupId)) &&
                        incoming().createdAt >=
                          get(/databases/$(database)/documents/groups/$(incoming().groupId)).data.createdAt &&
@@ -407,43 +645,31 @@ service cloud.firestore {
                        incoming().expiresAt > request.time;
 
       allow update: if isSignedIn() &&
-                       isValidGroupInvite(incoming(), token) &&
-                       incoming().token == existing().token &&
-                       incoming().groupId == existing().groupId &&
-                       incoming().groupNamePreview == existing().groupNamePreview &&
-                       incoming().createdBy == existing().createdBy &&
-                       incoming().expiresAt == existing().expiresAt &&
-                       incoming().maxUses == existing().maxUses &&
-                       incoming().createdAt == existing().createdAt &&
-                       (
-                         // Case 1: OWNER/ADMIN revoking an invite
-                         (
-                           isGroupAdminOrOwner(existing().groupId) &&
-                           incoming().revoked == true &&
-                           incoming().useCount == existing().useCount &&
-                           incoming().lastRedeemedBy == existing().lastRedeemedBy &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['revoked', 'updatedAt'])
-                         ) ||
-                         // Case 2: Atomic redemption coupled with creating /groups/{groupId}/members/{uid}
-                         (
-                           existing().revoked == false &&
-                           exists(/databases/$(database)/documents/groups/$(existing().groupId)) &&
-                           existing().createdAt >=
-                             get(/databases/$(database)/documents/groups/$(existing().groupId)).data.createdAt &&
-                           incoming().revoked == false &&
-                           existing().expiresAt > request.time &&
-                           existing().useCount < existing().maxUses &&
-                           incoming().useCount == existing().useCount + 1 &&
-                           incoming().lastRedeemedBy == request.auth.uid &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['useCount', 'lastRedeemedBy', 'updatedAt']) &&
-                           !exists(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)) &&
-                           !isLegacyGroupMember(existing().groupId, request.auth.uid) &&
-                           existsAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)) &&
-                           getAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)).data.inviteToken == token
-                         )
-                       );
+                       (incoming().revoked == true
+                         ? (incoming().diff(existing()).affectedKeys().hasOnly(['revoked', 'updatedAt'])
+                              ? (isCurrentGroupAdminOrOwnerGeneration(existing().groupId, existing())
+                                   ? (isValidGroupInviteFields(incoming(), token) &&
+                                      incoming().revoked == true)
+                                   : false)
+                              : false)
+                         : (incoming().revoked == false
+                              ? (existing().revoked == false &&
+                                 incoming().useCount == existing().useCount + 1 &&
+                                 incoming().lastRedeemedBy == request.auth.uid &&
+                                 incoming().diff(existing()).affectedKeys().hasOnly(['useCount', 'lastRedeemedBy', 'updatedAt'])
+                                   ? (isCurrentInviteGroupNonMember(existing().groupId, existing(), request.auth.uid)
+                                        ? (isValidGroupInviteFields(incoming(), token) &&
+                                           existing().expiresAt > request.time &&
+                                           existing().useCount < existing().maxUses &&
+                                           existsAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)) &&
+                                           getAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)).data.inviteToken == token)
+                                        : false)
+                                   : false)
+                              : false));
 
-      allow delete: if isSignedIn() && isGroupAdminOrOwner(existing().groupId);
+      allow delete: if isSignedIn() &&
+                       isGroupAdminOrOwner(existing().groupId) &&
+                       isCurrentGroupGeneration(existing().groupId, existing());
     }
 
     // 1. UserProfile Validation Blueprint
@@ -482,6 +708,10 @@ service cloud.firestore {
 
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'username', 'bio', 'avatarUrl', 'curiosities',
+                         'groupId', 'groupInviteCode', 'groupName', 'gamesHighScore', 'updatedAt'
+                       ]) &&
                        request.auth.uid == userId &&
                        isValidUserProfile(incoming()) &&
                        incoming().userId == existing().userId &&
@@ -495,23 +725,10 @@ service cloud.firestore {
     }
 
     // 2. Outing Validation Blueprint (kept compatible with upcoming AI Studio content-creation rules)
-    function isValidOuting(data) {
-      return data.keys().hasAll([
-               'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
-               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
-               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
-               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-               'rsvpNoCount', 'myRsvp', 'albumPhotos', 'createdAt', 'updatedAt'
-             ]) &&
-             data.keys().hasOnly([
-               'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
-               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
-               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
-               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-               'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'createdAt', 'updatedAt'
-             ]) &&
-             data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+    function isValidOutingFields(data) {
+      return data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
              data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
+             (!('groupGenerationId' in data) || (data.groupGenerationId is string && data.groupGenerationId.size() == 32)) &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.location is string && data.location.size() >= 1 && data.location.size() <= 200 &&
              data.meetingPoint is string && data.meetingPoint.size() <= 200 &&
@@ -536,59 +753,230 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidOuting(data) {
+      return data.keys().hasAll([
+               'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
+               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
+               'rsvpNoCount', 'myRsvp', 'albumPhotos', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().toSet().hasOnly([
+               'ownerId', 'groupId', 'groupGenerationId', 'title', 'location', 'meetingPoint',
+               'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+               'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+               'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
+               'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'createdAt', 'updatedAt'
+             ].toSet()) &&
+             isValidOutingFields(data);
+    }
+
+    function isPersonalOutingScope(groupId) {
+      return groupId is string && groupId.matches('^personal_[a-zA-Z0-9_\\-]{1,128}$');
+    }
+
+    function hasEmptyGroupOutingRsvpState(data) {
+      return data.rsvpYesCount == 0 &&
+             data.rsvpMaybeCount == 0 &&
+             data.rsvpNoCount == 0 &&
+             data.myRsvp == 'NONE' &&
+             (!('rsvpByUser' in data) ||
+              (data.rsvpByUser is map && data.rsvpByUser.size() == 0));
+    }
+
+    function hasAllowedOutingUpdateKeys(existingData, incomingData) {
+      let changedKeys = incomingData.diff(existingData).affectedKeys();
+      return isPersonalOutingScope(existingData.groupId)
+        ? changedKeys.hasOnly([
+            'groupId', 'title', 'location', 'meetingPoint', 'dateIso', 'time', 'status',
+            'budgetPerPerson', 'kitItems', 'additionalInfo', 'placePhotoUrl', 'destLat',
+            'destLng', 'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount', 'rsvpNoCount',
+            'myRsvp', 'rsvpByUser', 'albumPhotos', 'groupGenerationId', 'updatedAt'
+          ].toSet())
+        : changedKeys.hasOnly([
+            'groupId', 'title', 'location', 'meetingPoint', 'dateIso', 'time', 'status',
+            'budgetPerPerson', 'kitItems', 'additionalInfo', 'placePhotoUrl', 'destLat',
+            'destLng', 'meetLat', 'meetLng', 'albumPhotos', 'groupGenerationId', 'updatedAt'
+          ].toSet());
+    }
+
+    function hasExactGroupOutingRsvpKeys(data) {
+      return data.keys().hasAll([
+               'outingId', 'userId', 'groupId', 'groupGenerationId', 'choice', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().toSet().hasOnly([
+               'outingId', 'userId', 'groupId', 'groupGenerationId', 'choice', 'createdAt', 'updatedAt'
+             ].toSet());
+    }
+
+    function isValidGroupOutingRsvp(data, outingId, rsvpUid) {
+      return hasExactGroupOutingRsvpKeys(data) &&
+             data.outingId == outingId &&
+             data.userId == rsvpUid &&
+             isValidId(data.groupId) &&
+             data.groupGenerationId is string && data.groupGenerationId.matches('^[a-f0-9]{32}$') &&
+             data.choice in ['YES', 'MAYBE', 'NO'] &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp;
+    }
+
+    function hasCurrentGroupOutingForRsvp(groupId, outingId, generationId) {
+      return exists(/databases/$(database)/documents/outings/$(outingId)) &&
+             matchesCurrentGroupOutingForRsvp(groupId, outingId, generationId);
+    }
+
+    function matchesCurrentGroupOutingForRsvp(groupId, outingId, generationId) {
+      let outing = get(/databases/$(database)/documents/outings/$(outingId)).data;
+      return outing.groupId == groupId &&
+             outing.groupGenerationId == generationId &&
+             isCurrentGroupGeneration(groupId, outing);
+    }
+
+    function canReadCurrentGroupOutingRsvp(groupId, outingId, rsvpUid, data) {
+      return data.groupId == groupId &&
+             data.outingId == outingId &&
+             data.userId == rsvpUid &&
+             isCurrentGroupGeneration(groupId, data) &&
+             hasV2MemberDoc(groupId, request.auth.uid) &&
+             hasV2MemberDoc(groupId, rsvpUid) &&
+             hasCurrentGroupOutingForRsvp(groupId, outingId, data.groupGenerationId);
+    }
+
+    function isCurrentGroupOutingRsvp(groupId, outingId, rsvpUid, data) {
+      return data.groupId == groupId &&
+             data.outingId == outingId &&
+             data.userId == rsvpUid &&
+             data.userId == request.auth.uid &&
+             isCurrentGroupGeneration(groupId, data) &&
+             hasV2MemberDoc(groupId, request.auth.uid) &&
+             hasCurrentGroupOutingForRsvp(groupId, outingId, data.groupGenerationId);
+    }
+
+    function canReadUnansweredCurrentGroupOutingRsvp(outingId, rsvpUid) {
+      let outingPath = /databases/$(database)/documents/outings/$(outingId);
+      return exists(outingPath) &&
+             isCurrentGroupGeneration(get(outingPath).data.groupId, get(outingPath).data) &&
+             hasV2MemberDoc(get(outingPath).data.groupId, request.auth.uid) &&
+             hasV2MemberDoc(get(outingPath).data.groupId, rsvpUid);
+    }
+
+    function isAuthorizedOutingUpdateGeneration(existingData, incomingData, uid) {
+      return hasSameOptionalGroupGeneration(incomingData, existingData)
+               ? isCurrentGroupMemberContent(existingData, uid)
+               : (!('groupGenerationId' in existingData) &&
+                  isCurrentGroupMemberContent(incomingData, uid));
+    }
+
     match /outings/{outingId} {
       allow get: if isSignedIn() && isValidId(outingId) &&
                     (isOwnedOuting(existing()) ||
-                     (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
-      // Query rules cannot prove a dynamic createdAt >= parent.createdAt comparison
-      // for every candidate in a groupId-only list. The client adds that boundary;
-      // direct get remains generation-fenced to prevent privileged-ID reuse access.
-      // Fail closed: Rules cannot inspect a query's where clauses per candidate or
-      // prove resource.createdAt against the current parent generation. A groupId-only
-      // list would therefore disclose historical content after ID reuse.
+                     isCurrentGroupMemberContent(existing(), request.auth.uid));
       allow list: if isSignedIn() &&
-                     ('ownerId' in resource.data && resource.data.ownerId == request.auth.uid);
+                     (('ownerId' in resource.data && resource.data.ownerId == request.auth.uid) ||
+                      ('groupId' in resource.data &&
+                       isCurrentGroupGeneration(resource.data.groupId, resource.data) &&
+                       isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
                        incoming().ownerId == request.auth.uid &&
+                       (isPersonalOutingScope(incoming().groupId) || hasEmptyGroupOutingRsvpState(incoming())) &&
                        (!exists(/databases/$(database)/documents/groups/$(incoming().groupId)) ||
-                        (isCurrentGroupContent(incoming()) && isGroupMember(incoming().groupId)));
+                        isCurrentGroupMemberContent(incoming(), request.auth.uid));
 
       allow update: if isSignedIn() &&
                        isValidId(outingId) &&
-                       isValidOuting(incoming()) &&
-                       (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId)) &&
-                       (existing().ownerId == request.auth.uid || isCurrentGroupContent(existing())) &&
                        incoming().ownerId == existing().ownerId &&
+                       incoming().groupId == existing().groupId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'groupId', 'title', 'location', 'meetingPoint',
-                         'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
-                         'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
-                         'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-                         'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'updatedAt'
-                       ]);
+                       existing().ownerId == request.auth.uid &&
+                       hasAllowedOutingUpdateKeys(existing(), incoming()) &&
+                       (!exists(/databases/$(database)/documents/groups/$(existing().groupId)) ||
+                        isAuthorizedOutingUpdateGeneration(existing(), incoming(), request.auth.uid)) &&
+                       isValidOutingFields(incoming());
 
-      allow delete: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
+      allow delete: if isSignedIn() &&
+                       isValidId(outingId) &&
+                       isPersonalOutingScope(existing().groupId) &&
+                       existing().ownerId == request.auth.uid;
+
+      match /rsvps/{rsvpUid} {
+        allow get: if isSignedIn() &&
+                      isValidId(outingId) &&
+                      isValidId(rsvpUid) &&
+                      ((!exists(/databases/$(database)/documents/outings/$(outingId)/rsvps/$(rsvpUid)) &&
+                        canReadUnansweredCurrentGroupOutingRsvp(outingId, rsvpUid)) ||
+                       (exists(/databases/$(database)/documents/outings/$(outingId)/rsvps/$(rsvpUid)) &&
+                        isValidGroupOutingRsvp(existing(), outingId, rsvpUid) &&
+                        canReadCurrentGroupOutingRsvp(existing().groupId, outingId, rsvpUid, existing())));
+
+        allow create: if isSignedIn() &&
+                         isValidId(outingId) &&
+                         isValidId(rsvpUid) &&
+                         rsvpUid == request.auth.uid &&
+                         hasExactGroupOutingRsvpKeys(incoming()) &&
+                         isValidGroupOutingRsvp(incoming(), outingId, rsvpUid) &&
+                         incoming().createdAt == request.time &&
+                         incoming().updatedAt == request.time &&
+                         isCurrentGroupOutingRsvp(
+                           incoming().groupId,
+                           outingId,
+                           rsvpUid,
+                           incoming()
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(outingId) &&
+                         isValidId(rsvpUid) &&
+                         rsvpUid == request.auth.uid &&
+                         hasExactGroupOutingRsvpKeys(incoming()) &&
+                         isValidGroupOutingRsvp(existing(), outingId, rsvpUid) &&
+                         isValidGroupOutingRsvp(incoming(), outingId, rsvpUid) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['choice', 'updatedAt']) &&
+                         incoming().outingId == existing().outingId &&
+                         incoming().userId == existing().userId &&
+                         incoming().groupId == existing().groupId &&
+                         incoming().groupGenerationId == existing().groupGenerationId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt == request.time &&
+                         isCurrentGroupOutingRsvp(
+                           existing().groupId,
+                           outingId,
+                           rsvpUid,
+                           existing()
+                         );
+
+        allow delete: if isSignedIn() &&
+                         isValidId(outingId) &&
+                         isValidId(rsvpUid) &&
+                         rsvpUid == request.auth.uid &&
+                         isValidGroupOutingRsvp(existing(), outingId, rsvpUid) &&
+                         isCurrentGroupOutingRsvp(
+                           existing().groupId,
+                           outingId,
+                           rsvpUid,
+                           existing()
+                         );
+      }
     }
 
     // 3. GroupChatMessage Validation Blueprint
     function isValidChatMessage(data) {
       return data.keys().hasAll([
-               'senderId', 'senderName', 'groupId', 'text', 'messageType',
+               'senderId', 'senderName', 'text', 'messageType',
                'audioDurationSec', 'transcription', 'sharedOutingId',
                'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
              ]) &&
              data.keys().hasOnly([
-               'senderId', 'senderName', 'groupId', 'text', 'messageType',
+               'senderId', 'senderName', 'groupId', 'groupGenerationId', 'text', 'messageType',
                'audioDurationSec', 'audioUrl', 'transcription', 'sharedOutingId',
                'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
              ]) &&
              data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
-             data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
+             (!('groupId' in data) || (data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128)) &&
+             (!('groupGenerationId' in data) || (data.groupGenerationId is string && data.groupGenerationId.size() == 32)) &&
              data.text is string && data.text.size() <= 1000 &&
              data.messageType is string && data.messageType in ['TEXT', 'VOICE', 'OUTING_SHARE', 'STORY_REACTION'] &&
              data.audioDurationSec is int && data.audioDurationSec >= 0 &&
@@ -605,20 +993,28 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(messageId) &&
                     (existing().senderId == request.auth.uid ||
                      (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
-      // Group list is intentionally denied; use owner/sender scoped reads only.
-      allow list: if isSignedIn() && resource.data.senderId == request.auth.uid;
+      // Personal history is sender-scoped; shared messages require current group membership.
+      allow list: if isSignedIn() &&
+                     (('senderId' in resource.data && resource.data.senderId == request.auth.uid) ||
+                      ('groupId' in resource.data &&
+                       isCurrentGroupGeneration(resource.data.groupId, resource.data) &&
+                       isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
                        incoming().senderId == request.auth.uid &&
-                       isCurrentGroupContent(incoming()) &&
-                       isGroupMember(incoming().groupId);
+                       (!('groupId' in incoming()) ||
+                        (isCurrentGroupContent(incoming()) && isGroupMember(incoming().groupId)));
 
       allow update: if isSignedIn() &&
                        isValidId(messageId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['text', 'transcription', 'reactions', 'updatedAt']) &&
                        isValidChatMessage(incoming()) &&
                        incoming().senderId == existing().senderId &&
+                       ((!('groupId' in existing()) && !('groupId' in incoming())) ||
+                        ('groupId' in existing() && 'groupId' in incoming() &&
+                         incoming().groupId == existing().groupId)) &&
                        incoming().createdAt == existing().createdAt &&
                        (
                          (existing().senderId == request.auth.uid &&
@@ -627,22 +1023,73 @@ service cloud.firestore {
                           incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']))
                        );
 
-      allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid &&
+                       (!('groupId' in existing()) ||
+                        (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
     }
 
-    // 4. OutingStory Validation Blueprint
+    // 4. Private Group Feed (v2 membership only; no legacy-array fallback)
+    function isValidGroupPost(data, postId) {
+      return data.keys().hasAll(['authorId', 'authorName', 'groupId', 'groupGenerationId', 'text', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['authorId', 'authorName', 'groupId', 'groupGenerationId', 'text', 'createdAt', 'updatedAt']) &&
+             isValidId(postId) &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             isValidId(data.groupId) &&
+             data.groupGenerationId is string && data.groupGenerationId.size() == 32 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isCurrentGroupPostAuthorName(groupId, authorName) {
+      return hasV2MemberDoc(groupId, request.auth.uid) &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.displayName == authorName;
+    }
+
+    match /group_posts/{postId} {
+      // Queries must constrain groupId and groupGenerationId; membership is checked against
+      // the v2 member document. Firestore cannot prove a dynamic parent createdAt cutoff for
+      // list queries. The immutable registry-backed generation is the list authorization
+      // boundary; client creates still enforce createdAt >= group.createdAt, and legacy
+      // migration must never stamp unverified historical posts with the active generation.
+      allow get: if isSignedIn() &&
+                    isValidId(postId) &&
+                    isCurrentGroupContent(existing()) &&
+                    hasV2MemberDoc(existing().groupId, request.auth.uid);
+      allow list: if isSignedIn() &&
+                     isCurrentGroupGeneration(resource.data.groupId, resource.data) &&
+                     hasV2MemberDoc(resource.data.groupId, request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidGroupPost(incoming(), postId) &&
+                       isCurrentGroupContent(incoming()) &&
+                       hasV2MemberDoc(incoming().groupId, request.auth.uid) &&
+                       isCurrentGroupPostAuthorName(incoming().groupId, incoming().authorName);
+
+      // Posts are immutable after publishing; the author may remove their own post.
+      allow update: if false;
+      allow delete: if isSignedIn() &&
+                       isValidId(postId) &&
+                       existing().authorId == request.auth.uid &&
+                       isCurrentGroupContent(existing()) &&
+                       hasV2MemberDoc(existing().groupId, request.auth.uid);
+    }
+
+    // 5. OutingStory Validation Blueprint
     function isValidStory(data) {
       return data.keys().hasAll([
                'authorId', 'authorName', 'caption', 'filterStyle',
                'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
              ]) &&
              data.keys().hasOnly([
-               'authorId', 'authorName', 'groupId', 'caption', 'filterStyle',
+               'authorId', 'authorName', 'groupId', 'groupGenerationId', 'caption', 'filterStyle',
                'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
              ]) &&
              data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
              data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
              (!('groupId' in data) || (data.groupId is string && data.groupId.size() <= 128)) &&
+             (!('groupGenerationId' in data) || (data.groupGenerationId is string && data.groupGenerationId.size() == 32)) &&
              data.caption is string && data.caption.size() <= 300 &&
              data.filterStyle is string && data.filterStyle.size() <= 40 &&
              data.mediaUri is string && data.mediaUri.size() <= 500 &&
@@ -656,8 +1103,12 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(storyId) &&
                     (existing().authorId == request.auth.uid ||
                      ('groupId' in existing() && isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
-      // Group list is intentionally denied; direct story reads remain fenced.
-      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
+      // Personal history is author-scoped; shared stories require current group membership.
+      allow list: if isSignedIn() &&
+                     (('authorId' in resource.data && resource.data.authorId == request.auth.uid) ||
+                      ('groupId' in resource.data &&
+                       isCurrentGroupGeneration(resource.data.groupId, resource.data) &&
+                       isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&
@@ -668,17 +1119,23 @@ service cloud.firestore {
 
       allow update: if isSignedIn() &&
                        isValidId(storyId) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'likesCount', 'updatedAt']) &&
                        isValidStory(incoming()) &&
                        incoming().authorId == existing().authorId &&
                        incoming().createdAt == existing().createdAt &&
                        (
                          (existing().authorId == request.auth.uid &&
+                          !('groupId' in existing()) && !('groupId' in incoming()) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'likesCount', 'updatedAt'])) ||
-                         ('groupId' in existing() && isCurrentGroupContent(existing()) && isGroupMember(existing().groupId) &&
+                         ('groupId' in existing() && 'groupId' in incoming() &&
+                          incoming().groupId == existing().groupId &&
+                          isCurrentGroupContent(existing()) && isGroupMember(existing().groupId) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']))
                        );
 
-      allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid &&
+                       (!('groupId' in existing()) ||
+                        (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
     }
   }
 }

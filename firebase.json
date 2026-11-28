@@ -2,7 +2,8 @@
   "firestore": [
     {
       "database": "ai-studio-android-dondesau-3e5eb0b4-f7ee-4853-bbc6-4908734fa7b9",
-      "rules": "firestore.rules"
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
     }
   ],
   "emulators": {

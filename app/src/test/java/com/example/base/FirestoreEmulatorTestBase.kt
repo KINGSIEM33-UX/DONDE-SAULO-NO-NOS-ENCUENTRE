@@ -35,6 +35,14 @@ abstract class FirestoreEmulatorTestBase {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val resId = context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
         databaseId = if (resId != 0) context.getString(resId) else "demo-database"
+        val (firestoreHost, firestorePort) = parseEmulatorEndpoint(
+            "FIRESTORE_EMULATOR_HOST",
+            "127.0.0.1:8086"
+        )
+        val (authHost, authPort) = parseEmulatorEndpoint(
+            "FIREBASE_AUTH_EMULATOR_HOST",
+            "127.0.0.1:9098"
+        )
 
         val app = if (FirebaseApp.getApps(context).isEmpty()) {
             val newApp = FirebaseApp.initializeApp(
@@ -46,13 +54,13 @@ abstract class FirestoreEmulatorTestBase {
                     .build()
             )
             val newFirestore = FirebaseFirestore.getInstance(newApp, databaseId)
-            newFirestore.useEmulator(EMULATOR_HOST, FIRESTORE_PORT)
+            newFirestore.useEmulator(firestoreHost, firestorePort)
             newFirestore.firestoreSettings = FirebaseFirestoreSettings.Builder()
                 .setLocalCacheSettings(MemoryCacheSettings.newBuilder().build())
                 .build()
 
             val newAuth = FirebaseAuth.getInstance(newApp)
-            newAuth.useEmulator(EMULATOR_HOST, AUTH_PORT)
+            newAuth.useEmulator(authHost, authPort)
             newApp
         } else {
             FirebaseApp.getInstance()
@@ -65,6 +73,20 @@ abstract class FirestoreEmulatorTestBase {
     @After
     open fun tearDownFirebase() {
         auth.signOut()
+    }
+
+    private fun parseEmulatorEndpoint(environmentName: String, defaultEndpoint: String): Pair<String, Int> {
+        val endpoint = System.getenv(environmentName)?.takeIf { it.isNotBlank() } ?: defaultEndpoint
+        val separator = endpoint.lastIndexOf(':')
+        require(separator > 0 && separator < endpoint.lastIndex) {
+            "$environmentName must use host:port format"
+        }
+        val host = endpoint.substring(0, separator).removeSurrounding("[", "]")
+        val port = endpoint.substring(separator + 1).toIntOrNull()
+        require(host.isNotBlank() && port != null && port in 1..65535) {
+            "$environmentName must contain a valid host and port"
+        }
+        return host to port
     }
 
     protected suspend fun signInTestUser(email: String): String = withContext(Dispatchers.IO) {
@@ -88,9 +110,6 @@ abstract class FirestoreEmulatorTestBase {
     }
 
     private companion object {
-        const val EMULATOR_HOST = "127.0.0.1"
-        const val FIRESTORE_PORT = 8085
-        const val AUTH_PORT = 9099
         const val PROJECT_ID = "demo-no-project"
         const val DEFAULT_PASSWORD = "password123"
         const val AUTH_TIMEOUT_MS = 5000L

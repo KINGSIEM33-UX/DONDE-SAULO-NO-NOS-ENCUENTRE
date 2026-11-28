@@ -12,6 +12,24 @@ import org.junit.Test
 class SocialRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
     @Test
+    fun groupQueriesRequireAValidGenerationId() {
+        val repository = SocialRepository(firestore)
+        val validGeneration = "a".repeat(32)
+
+        assertThat(repository.requireCurrentGroupGenerationId("group-1", validGeneration))
+            .isEqualTo(validGeneration)
+        assertThrows(IllegalStateException::class.java) {
+            repository.requireCurrentGroupGenerationId("group-1", "")
+        }
+        assertThrows(IllegalStateException::class.java) {
+            repository.requireCurrentGroupGenerationId("group-1", "z".repeat(32))
+        }
+        assertThrows(IllegalStateException::class.java) {
+            repository.requireCurrentGroupGenerationId("", validGeneration)
+        }
+    }
+
+    @Test
     fun createOuting_validPayload_createsDocumentAndReturnsId() = runBlocking {
         val uid = signInTestUser(ALICE_EMAIL)
         val repository = SocialRepository(firestore)
@@ -82,6 +100,79 @@ class SocialRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertThat(result.isFailure).isTrue()
         val exception = result.exceptionOrNull()?.unwrapFirestoreException()
         assertThat(exception?.code).isEqualTo(FirebaseFirestoreException.Code.PERMISSION_DENIED)
+    }
+
+    @Test
+    fun groupRsvpObserver_readsEmptyCurrentMemberSlotsAndOtherMembersResponse() = runBlocking {
+        val aliceUid = signInTestUser(ALICE_EMAIL)
+        val repository = SocialRepository(firestore)
+        val group = withTimeout(DEFAULT_TIMEOUT_MS) {
+            repository.createGroupAtomic("Grupo RSVP", aliceUid, "Alice").getOrThrow()
+        }
+        val invite = withTimeout(DEFAULT_TIMEOUT_MS) {
+            repository.createGroupInvite(group.id, group.name, aliceUid).getOrThrow()
+        }
+
+        val bobUid = signInTestUser(BOB_EMAIL)
+        val joinOutcome = withTimeout(DEFAULT_TIMEOUT_MS) {
+            repository.redeemInviteAndJoinGroupAtomic(invite.token, bobUid, "Bob")
+        }
+        assertThat(joinOutcome is InviteRedemptionOutcome.Joined).isTrue()
+
+        signInTestUser(ALICE_EMAIL)
+        val outingId = withTimeout(DEFAULT_TIMEOUT_MS) {
+            repository.createOuting(
+                Outing(
+                    groupId = group.id,
+                    title = "Prueba de respuesta individual",
+                    location = "Madrid",
+                    dateIso = "2026-12-05",
+                    time = "19:00"
+                ),
+                aliceUid
+            ).getOrThrow()
+        }
+        val responses = repository.observeGroupOutingRsvps(
+            groupId = group.id,
+            groupGenerationId = group.generationId,
+            memberIds = listOf(aliceUid, bobUid)
+        )
+
+        val unanswered = withTimeout(DEFAULT_TIMEOUT_MS) { responses.first() }
+        assertThat(unanswered).isEmpty()
+
+        val bobWrite = withTimeout(DEFAULT_TIMEOUT_MS) {
+            signInTestUser(BOB_EMAIL)
+            repository.updateGroupOutingRsvpTransactional(
+                outingId = outingId,
+                groupId = group.id,
+                groupGenerationId = group.generationId,
+                choice = RsvpChoice.YES,
+                userId = bobUid
+            )
+        }
+        assertThat(bobWrite.isSuccess).isTrue()
+
+        signInTestUser(ALICE_EMAIL)
+        val observedBob = withTimeout(DEFAULT_TIMEOUT_MS) {
+            responses.first { list -> list.any { it.userId == bobUid } }
+        }
+        assertThat(observedBob.single().rsvpChoice).isEqualTo(RsvpChoice.YES)
+    }
+
+    @Test
+    fun updateOutingRsvpTransactional_rejectsAnotherUsersUid() = runBlocking {
+        val aliceUid = signInTestUser(ALICE_EMAIL)
+        val result = withTimeout(DEFAULT_TIMEOUT_MS) {
+            SocialRepository(firestore).updateOutingRsvpTransactional(
+                outingId = "unused_outing",
+                userId = "${aliceUid}_forged",
+                choice = RsvpChoice.YES
+            )
+        }
+
+        assertThat(result.isFailure).isTrue()
+        assertThat(result.exceptionOrNull()?.message).contains("usuario autenticado")
     }
 
     @Test

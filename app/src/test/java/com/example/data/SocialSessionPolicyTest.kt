@@ -114,6 +114,21 @@ class SocialSessionPolicyTest {
     }
 
     @Test
+    fun personalChatAndStoryPayloadsOmitGroupIdButSharedPayloadsKeepIt() {
+        val personalChat = GroupChatMessage(groupId = "").toCreateMap("uid_abc123")
+        val groupChat = GroupChatMessage(groupId = "v2_grp_SOCIAL7P4R6T8V3W5X7Y9Z2A4B6")
+            .toCreateMap("uid_abc123")
+        val personalStory = OutingStory(groupId = "").toCreateMap("uid_abc123")
+        val groupStory = OutingStory(groupId = "v2_grp_SOCIAL7P4R6T8V3W5X7Y9Z2A4B6")
+            .toCreateMap("uid_abc123")
+
+        assertThat(personalChat).doesNotContainKey("groupId")
+        assertThat(personalStory).doesNotContainKey("groupId")
+        assertThat(groupChat["groupId"]).isEqualTo("v2_grp_SOCIAL7P4R6T8V3W5X7Y9Z2A4B6")
+        assertThat(groupStory["groupId"]).isEqualTo("v2_grp_SOCIAL7P4R6T8V3W5X7Y9Z2A4B6")
+    }
+
+    @Test
     fun filterOutingsAllowedForCloudWrite_blocksGuestDemoLoadingErrorAndDemoIds() {
         val demoOuting = Outing(
             id = "outing_upcoming_confirmed",
@@ -191,6 +206,28 @@ class SocialSessionPolicyTest {
         )
         assertThat(netErrWithCache.message).contains("Sin conexión")
         assertThat(netErrWithCache.hasCachedRealData).isTrue()
+    }
+
+    @Test
+    fun groupRsvpSnapshot_isRetainedOnlyForTransientFailureWithinAuthorizedScope() {
+        assertThat(
+            SocialSessionPolicy.shouldRetainCachedGroupRsvpSnapshot(
+                scopeIsStillAuthorized = true,
+                failureIsTransient = true
+            )
+        ).isTrue()
+        assertThat(
+            SocialSessionPolicy.shouldRetainCachedGroupRsvpSnapshot(
+                scopeIsStillAuthorized = false,
+                failureIsTransient = true
+            )
+        ).isFalse()
+        assertThat(
+            SocialSessionPolicy.shouldRetainCachedGroupRsvpSnapshot(
+                scopeIsStillAuthorized = true,
+                failureIsTransient = false
+            )
+        ).isFalse()
     }
 
     @Test
