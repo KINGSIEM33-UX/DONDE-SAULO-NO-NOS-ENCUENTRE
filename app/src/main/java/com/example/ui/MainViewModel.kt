@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.BibleSection
+import com.example.data.CloudLoadState
+import com.example.data.DataOrigin
 import com.example.data.FavoriteVerse
 import com.example.data.GeminiClient
 import com.example.data.GroupChatMessage
@@ -21,6 +23,8 @@ import com.example.data.Repository
 import com.example.data.RsvpChoice
 import com.example.data.SocialGroup
 import com.example.data.SocialRepository
+import com.example.data.SocialSessionPolicy
+import com.example.data.SocialSyncSnapshot
 import com.example.data.SoundEffectsHelper
 import com.example.data.StudyEvent
 import com.example.data.UserProfile
@@ -72,6 +76,10 @@ class MainViewModel(
     private val socialRepository: SocialRepository? = repository.firestore?.let { SocialRepository(it) }
 ) : ViewModel() {
 
+    private companion object {
+        const val PERSONAL_SCOPE_SENTINEL = "__personal_no_group__"
+    }
+
     private fun dateOffsetIso(daysOffset: Int): String {
         val cal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, daysOffset) }
         return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
@@ -98,7 +106,10 @@ class MainViewModel(
     val userEmail = MutableStateFlow("")
     val authStatusMessage = MutableStateFlow<String?>(null)
     val activeSocialGroup = MutableStateFlow<SocialGroup?>(null)
+    val socialSyncState = MutableStateFlow(SocialSyncSnapshot.forGuestDemo())
 
+    private var currentAuthDisplayName: String? = null
+    private var currentAuthPhotoUrl: String? = null
     private var profileJob: Job? = null
     private var groupJob: Job? = null
     private var outingsJob: Job? = null
@@ -108,19 +119,39 @@ class MainViewModel(
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         val user = firebaseAuth.currentUser
-        currentUserId.value = user?.uid
-        isUserLoggedIn.value = user != null
-        userEmail.value = user?.email ?: ""
         if (user != null) {
-            userProfile.value = userProfile.value.copy(
-                userId = user.uid,
-                username = user.displayName?.takeIf { it.isNotBlank() } ?: userProfile.value.username
-            )
-            startCloudObservers(user.uid)
+            val isSameActiveRealSession =
+                currentUserId.value == user.uid && socialSyncState.value.origin == DataOrigin.CLOUD_REAL
+            currentUserId.value = user.uid
+            isUserLoggedIn.value = true
+            userEmail.value = user.email ?: ""
+            currentAuthDisplayName = user.displayName
+            currentAuthPhotoUrl = user.photoUrl?.toString()
+            if (!isSameActiveRealSession) {
+                onAuthenticatedSessionStarted(
+                    uid = user.uid,
+                    displayName = user.displayName,
+                    email = user.email,
+                    photoUrl = user.photoUrl?.toString()
+                )
+            }
         } else {
-            stopCloudObservers()
-            activeSocialGroup.value = null
-            observedGroupId = null
+            val wasAuthenticated = isUserLoggedIn.value ||
+                currentUserId.value != null ||
+                socialSyncState.value.origin == DataOrigin.CLOUD_REAL
+            currentUserId.value = null
+            isUserLoggedIn.value = false
+            userEmail.value = ""
+            currentAuthDisplayName = null
+            currentAuthPhotoUrl = null
+            if (wasAuthenticated) {
+                enterGuestDemoMode()
+            } else {
+                stopCloudObservers()
+                activeSocialGroup.value = null
+                observedGroupId = null
+                socialSyncState.value = SocialSyncSnapshot.forGuestDemo()
+            }
         }
     }
 
@@ -529,31 +560,205 @@ class MainViewModel(
         }
     }
 
-    // --- Cloud Realtime Observers (Multi-User Group Scoped) ---
+    // --- Session Mode Transitions (Guest Demo vs. Authenticated Cloud Real) ---
+    private fun onAuthenticatedSessionStarted(
+        uid: String,
+        displayName: String?,
+        email: String?,
+        photoUrl: String?
+    ) {
+        stopCloudObservers()
+        observedGroupId = null
+        activeSocialGroup.value = null
+        selectedOutingForDetail.value = null
+
+        // Immediately discard all Guest Demo data so fictional items are never shown or written as real.
+        userProfile.value = SocialSessionPolicy.buildCleanRealUserProfile(
+            uid = uid,
+            displayName = displayName,
+            email = email,
+            photoUrl = photoUrl
+        )
+        groupMembers.value = emptyList()
+        outings.value = emptyList()
+        groupChatMessages.value = emptyList()
+        stories.value = emptyList()
+        socialSyncState.value = SocialSyncSnapshot.forRealUserLoading()
+
+        startCloudObservers(uid)
+    }
+
+    private fun enterGuestDemoMode() {
+        stopCloudObservers()
+        activeSocialGroup.value = null
+        observedGroupId = null
+        selectedOutingForDetail.value = null
+        userProfile.value = defaultGuestProfile
+        groupMembers.value = defaultGuestMembers
+        outings.value = defaultOutings
+        groupChatMessages.value = defaultGroupChat
+        stories.value = defaultStories
+        socialSyncState.value = SocialSyncSnapshot.forGuestDemo()
+    }
+
+    fun refreshCloudData() {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid == null || repo == null) {
+            authStatusMessage.value = "Inicia sesión con Google para cargar tus datos en la nube"
+            return
+        }
+        observedGroupId = null
+        socialSyncState.value = SocialSyncSnapshot.forRealUserLoading()
+        authStatusMessage.value = "Actualizando datos desde Firebase…"
+        startCloudObservers(uid)
+    }
+
+    // --- Cloud Realtime Observers (Read-Only on Sign-In, Zero Fictional Auto-Seeding) ---
     private fun startCloudObservers(uid: String) {
-        val repo = socialRepository ?: return
+        val repo = socialRepository
+        if (repo == null) {
+            val unavailableErr = CloudLoadState.Error(
+                message = "Firebase Firestore no está inicializado en esta compilación.",
+                hasCachedRealData = false
+            )
+            socialSyncState.value = SocialSyncSnapshot(
+                origin = DataOrigin.CLOUD_REAL,
+                profileState = unavailableErr,
+                groupState = unavailableErr,
+                outingsState = unavailableErr,
+                chatState = unavailableErr,
+                storiesState = unavailableErr
+            )
+            return
+        }
         stopCloudObservers()
 
         profileJob = viewModelScope.launch {
             repo.observeUserProfile(uid)
                 .catch { e ->
                     Log.w("MainViewModel", "Profile observer error: ${e.message}")
-                    authStatusMessage.value = "Error al leer perfil en la nube: ${e.localizedMessage ?: "sin conexión"}"
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "tu perfil",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = 0
+                    )
+                    val cur = socialSyncState.value
+                    socialSyncState.value = cur.copy(
+                        origin = DataOrigin.CLOUD_REAL,
+                        profileState = err,
+                        groupState = if (cur.groupState is CloudLoadState.Loading) err else cur.groupState,
+                        outingsState = if (cur.outingsState is CloudLoadState.Loading) {
+                            CloudLoadState.Error(err.message, hasCachedRealData = outings.value.isNotEmpty())
+                        } else cur.outingsState,
+                        chatState = if (cur.chatState is CloudLoadState.Loading) {
+                            CloudLoadState.Error(err.message, hasCachedRealData = groupChatMessages.value.isNotEmpty())
+                        } else cur.chatState,
+                        storiesState = if (cur.storiesState is CloudLoadState.Loading) {
+                            CloudLoadState.Error(err.message, hasCachedRealData = stories.value.isNotEmpty())
+                        } else cur.storiesState
+                    )
+                    authStatusMessage.value = err.message
                 }
                 .collect { remoteProfile ->
-                    if (remoteProfile != null) {
-                        userProfile.value = remoteProfile
-                        val targetGroup = remoteProfile.groupId.ifBlank { remoteProfile.groupInviteCode.ifBlank { "QUEDA-2026" } }
+                    val (resolvedProfile, _) = SocialSessionPolicy.resolveProfileOnCloudEmit(
+                        remoteProfile = remoteProfile,
+                        uid = uid,
+                        displayName = currentAuthDisplayName,
+                        email = userEmail.value,
+                        photoUrl = currentAuthPhotoUrl
+                    )
+                    userProfile.value = resolvedProfile
+                    socialSyncState.value = socialSyncState.value.copy(
+                        origin = DataOrigin.CLOUD_REAL,
+                        profileState = CloudLoadState.Loaded
+                    )
+
+                    val targetGroup = SocialSessionPolicy.resolveTargetGroupId(resolvedProfile)
+                    if (targetGroup.isNotBlank()) {
                         if (observedGroupId != targetGroup) {
-                            startGroupScopedObservers(uid, targetGroup, remoteProfile)
+                            startGroupScopedObservers(uid, targetGroup, resolvedProfile)
                         }
                     } else {
-                        val initialProfile = userProfile.value.copy(userId = uid)
-                        repo.saveUserProfile(initialProfile, uid).onFailure { err ->
-                            authStatusMessage.value = "No se pudo guardar tu perfil: ${err.localizedMessage}"
+                        if (observedGroupId != PERSONAL_SCOPE_SENTINEL) {
+                            startPersonalScopedObservers(uid)
                         }
-                        startGroupScopedObservers(uid, initialProfile.groupId, initialProfile)
                     }
+                }
+        }
+    }
+
+    private fun startPersonalScopedObservers(uid: String) {
+        val repo = socialRepository ?: return
+        observedGroupId = PERSONAL_SCOPE_SENTINEL
+        groupJob?.cancel()
+        outingsJob?.cancel()
+        chatJob?.cancel()
+        storiesJob?.cancel()
+
+        activeSocialGroup.value = null
+        groupMembers.value = emptyList()
+        socialSyncState.value = socialSyncState.value.copy(
+            origin = DataOrigin.CLOUD_REAL,
+            groupState = CloudLoadState.Loaded,
+            outingsState = CloudLoadState.Loading,
+            chatState = CloudLoadState.Loading,
+            storiesState = CloudLoadState.Loading
+        )
+
+        outingsJob = viewModelScope.launch {
+            repo.observeOutings(uid)
+                .catch { e ->
+                    Log.w("MainViewModel", "Personal outings observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "tus salidas",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = outings.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(outingsState = err)
+                    authStatusMessage.value = err.message
+                }
+                .collect { remoteOutings ->
+                    outings.value = remoteOutings
+                    socialSyncState.value = socialSyncState.value.copy(outingsState = CloudLoadState.Loaded)
+                }
+        }
+
+        chatJob = viewModelScope.launch {
+            repo.observeChatMessages(uid)
+                .catch { e ->
+                    Log.w("MainViewModel", "Personal chat observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "los mensajes",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = groupChatMessages.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(chatState = err)
+                }
+                .collect { remoteMessages ->
+                    groupChatMessages.value = remoteMessages
+                    socialSyncState.value = socialSyncState.value.copy(chatState = CloudLoadState.Loaded)
+                }
+        }
+
+        storiesJob = viewModelScope.launch {
+            repo.observeStories(uid)
+                .catch { e ->
+                    Log.w("MainViewModel", "Personal stories observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "las instantáneas",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = stories.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(storiesState = err)
+                }
+                .collect { remoteStories ->
+                    stories.value = remoteStories
+                    socialSyncState.value = socialSyncState.value.copy(storiesState = CloudLoadState.Loaded)
                 }
         }
     }
@@ -566,33 +771,41 @@ class MainViewModel(
         chatJob?.cancel()
         storiesJob?.cancel()
 
-        // Ensure user is registered in /groups/{groupId} so Firestore rules grant shared group access
-        viewModelScope.launch {
-            repo.createOrEnsureGroup(
-                groupId = groupId,
-                groupName = profile.groupName,
-                creatorUid = uid,
-                creatorName = profile.username
-            ).onFailure { err ->
-                Log.w("MainViewModel", "Could not ensure group doc: ${err.message}")
-            }
-        }
+        socialSyncState.value = socialSyncState.value.copy(
+            origin = DataOrigin.CLOUD_REAL,
+            groupState = CloudLoadState.Loading,
+            outingsState = CloudLoadState.Loading,
+            chatState = CloudLoadState.Loading,
+            storiesState = CloudLoadState.Loading
+        )
 
         groupJob = viewModelScope.launch {
             repo.observeGroup(groupId)
-                .catch { e -> Log.w("MainViewModel", "Group observer error: ${e.message}") }
+                .catch { e ->
+                    Log.w("MainViewModel", "Group observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "el grupo",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = groupMembers.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(groupState = err)
+                }
                 .collect { remoteGroup ->
                     activeSocialGroup.value = remoteGroup
                     if (remoteGroup != null) {
                         val realMembers = remoteGroup.memberIds.map { memberUid ->
                             val name = remoteGroup.memberNames[memberUid]?.ifBlank { "Miembro" } ?: "Miembro"
-                            if (memberUid == uid) "$name (Tú) 👑" else name
-                        }.ifEmpty { listOf("${profile.username} (Tú) 👑") }
+                            if (memberUid == uid) "$name (Tú)" else name
+                        }
                         groupMembers.value = realMembers
                         if (remoteGroup.name.isNotBlank() && userProfile.value.groupName != remoteGroup.name) {
                             userProfile.value = userProfile.value.copy(groupName = remoteGroup.name)
                         }
+                    } else {
+                        groupMembers.value = emptyList()
                     }
+                    socialSyncState.value = socialSyncState.value.copy(groupState = CloudLoadState.Loaded)
                 }
         }
 
@@ -600,44 +813,55 @@ class MainViewModel(
             repo.observeGroupOutings(groupId)
                 .catch { e ->
                     Log.w("MainViewModel", "Group outings observer error: ${e.message}")
-                    // Fallback to owner-scoped query if group doc is still propagating
-                    repo.observeOutings(uid)
-                        .catch { inner -> Log.w("MainViewModel", "Owner outings fallback error: ${inner.message}") }
-                        .collect { fallbackList -> outings.value = fallbackList }
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "las salidas del grupo",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = outings.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(outingsState = err)
+                    authStatusMessage.value = err.message
                 }
                 .collect { remoteOutings ->
-                    if (remoteOutings.isNotEmpty()) {
-                        outings.value = remoteOutings
-                    } else {
-                        val alreadySeeded = repository.preferences.hasSeededCloudForUser(uid)
-                        if (!alreadySeeded) {
-                            repository.preferences.markCloudSeededForUser(uid)
-                            defaultOutings.forEach { seed ->
-                                repo.createOuting(
-                                    seed.copy(ownerId = uid, groupId = groupId),
-                                    uid
-                                )
-                            }
-                        } else {
-                            outings.value = emptyList()
-                        }
-                    }
+                    // Real accounts NEVER auto-seed fictional demo outings into Firestore.
+                    outings.value = remoteOutings
+                    socialSyncState.value = socialSyncState.value.copy(outingsState = CloudLoadState.Loaded)
                 }
         }
 
         chatJob = viewModelScope.launch {
             repo.observeGroupChatMessages(groupId)
-                .catch { e -> Log.w("MainViewModel", "Chat observer error: ${e.message}") }
+                .catch { e ->
+                    Log.w("MainViewModel", "Chat observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "los mensajes del grupo",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = groupChatMessages.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(chatState = err)
+                }
                 .collect { remoteMessages ->
                     groupChatMessages.value = remoteMessages
+                    socialSyncState.value = socialSyncState.value.copy(chatState = CloudLoadState.Loaded)
                 }
         }
 
         storiesJob = viewModelScope.launch {
             repo.observeGroupStories(groupId)
-                .catch { e -> Log.w("MainViewModel", "Stories observer error: ${e.message}") }
+                .catch { e ->
+                    Log.w("MainViewModel", "Stories observer error: ${e.message}")
+                    val err = SocialSessionPolicy.resolveErrorState(
+                        scopeLabel = "las instantáneas del grupo",
+                        throwable = e,
+                        currentOrigin = socialSyncState.value.origin,
+                        currentItemCount = stories.value.size
+                    )
+                    socialSyncState.value = socialSyncState.value.copy(storiesState = err)
+                }
                 .collect { remoteStories ->
                     stories.value = remoteStories
+                    socialSyncState.value = socialSyncState.value.copy(storiesState = CloudLoadState.Loaded)
                 }
         }
     }
@@ -820,15 +1044,25 @@ class MainViewModel(
         }
     }
 
+    private fun resolveActiveWriteGroupId(): String {
+        val uid = currentUserId.value
+        val profileGroup = SocialSessionPolicy.resolveTargetGroupId(userProfile.value)
+        return if (uid != null) {
+            SocialSessionPolicy.resolveGroupIdForWrite(profileGroup, uid)
+        } else {
+            profileGroup.ifBlank { SocialSessionPolicy.GUEST_DEMO_GROUP_ID }
+        }
+    }
+
     // --- World 1: Outing CRUD, Calendar & Map Actions ---
     fun saveOrUpdateOuting(outing: Outing) {
         val existingList = outings.value.toMutableList()
         val existingIdx = existingList.indexOfFirst { it.id == outing.id && outing.id.isNotBlank() }
-        val activeGroupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode }
+        val activeGroupId = resolveActiveWriteGroupId()
         val finalOuting = if (outing.id.isBlank()) {
             outing.copy(
                 id = "outing_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-                ownerId = currentUserId.value ?: "local_user",
+                ownerId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
                 groupId = activeGroupId
             )
         } else {
@@ -870,7 +1104,7 @@ class MainViewModel(
 
     fun updateOutingRsvp(outingId: String, choice: RsvpChoice) {
         val target = outings.value.firstOrNull { it.id == outingId } ?: return
-        val uid = currentUserId.value ?: "local_user"
+        val uid = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
 
         val updatedMap = target.rsvpByUser.toMutableMap()
         if (choice == RsvpChoice.NONE) {
@@ -984,9 +1218,9 @@ class MainViewModel(
         if (clean.isBlank()) return
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-            senderId = currentUserId.value ?: "local_user",
-            senderName = userProfile.value.username,
-            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
+            senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
+            senderName = userProfile.value.username.ifBlank { "Usuario" },
+            groupId = resolveActiveWriteGroupId(),
             text = clean,
             messageType = "TEXT"
         )
@@ -1010,9 +1244,9 @@ class MainViewModel(
         val cleanDur = durationSec.coerceAtLeast(1)
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-            senderId = currentUserId.value ?: "local_user",
-            senderName = userProfile.value.username,
-            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
+            senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
+            senderName = userProfile.value.username.ifBlank { "Usuario" },
+            groupId = resolveActiveWriteGroupId(),
             text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
             audioDurationSec = cleanDur.toLong(),
@@ -1034,10 +1268,10 @@ class MainViewModel(
     fun shareOutingToGroupChat(outing: Outing) {
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-            senderId = currentUserId.value ?: "local_user",
-            senderName = userProfile.value.username,
-            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
-            text = "📌 ¡He compartido la salida '${outing.title}'! ¿Quién se apunta?",
+            senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
+            senderName = userProfile.value.username.ifBlank { "Usuario" },
+            groupId = resolveActiveWriteGroupId(),
+            text = "He compartido la salida '${outing.title}'. ¿Quién se apunta?",
             messageType = "OUTING_SHARE",
             sharedOutingId = outing.id,
             sharedOutingTitle = "${outing.title} (${outing.dateIso} • ${outing.time} • ${outing.budgetPerPerson})"
@@ -1087,10 +1321,10 @@ class MainViewModel(
     ) {
         val story = OutingStory(
             id = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-            authorId = currentUserId.value ?: "local_user",
-            authorName = userProfile.value.username,
-            groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
-            caption = caption.ifBlank { "¡Momento épico con el grupo! ✨" },
+            authorId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
+            authorName = userProfile.value.username.ifBlank { "Usuario" },
+            groupId = resolveActiveWriteGroupId(),
+            caption = caption.ifBlank { "Recuerdo compartido con el grupo" },
             filterStyle = filterStyle,
             mediaUri = mediaUri,
             outingTitle = outingTitle,
@@ -1567,48 +1801,21 @@ class MainViewModel(
             authStatusMessage.value = "Inicia sesión con Google para sincronizar en la nube"
             return
         }
-        viewModelScope.launch {
-            authStatusMessage.value = "Sincronizando perfil, grupo y salidas..."
-            val profileResult = repo.saveUserProfile(userProfile.value.copy(userId = uid), uid)
-            val groupResult = repo.createOrEnsureGroup(
-                groupId = userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode },
-                groupName = userProfile.value.groupName,
-                creatorUid = uid,
-                creatorName = userProfile.value.username
-            )
-            var outingFailures = 0
-            outings.value.forEach { outing ->
-                val res = repo.upsertOuting(outing.copy(groupId = userProfile.value.groupId), uid)
-                if (res.isFailure) outingFailures++
-            }
-
-            if (profileResult.isSuccess && groupResult.isSuccess && outingFailures == 0) {
-                authStatusMessage.value = "✅ Sincronización completada con Firebase Firestore"
-                playFeedbackSound(true)
-            } else {
-                val reason = profileResult.exceptionOrNull()?.localizedMessage
-                    ?: groupResult.exceptionOrNull()?.localizedMessage
-                    ?: "$outingFailures salidas no pudieron sincronizarse"
-                authStatusMessage.value = "⚠️ Sincronización parcial: $reason"
-            }
-        }
+        // Never blindly push local/guest demo data to Firestore on sync;
+        // refresh real cloud observers instead so remote data is loaded honestly.
+        refreshCloudData()
     }
 
     fun handleLogout() {
-        stopCloudObservers()
         repository.logout()
         GeminiClient.resetSessions()
         currentUserId.value = null
         isUserLoggedIn.value = false
         userEmail.value = ""
-        activeSocialGroup.value = null
-        observedGroupId = null
-        userProfile.value = defaultGuestProfile
-        groupMembers.value = defaultGuestMembers
-        outings.value = defaultOutings
-        groupChatMessages.value = defaultGroupChat
-        stories.value = defaultStories
-        authStatusMessage.value = "Sesión cerrada correctamente"
+        currentAuthDisplayName = null
+        currentAuthPhotoUrl = null
+        enterGuestDemoMode()
+        authStatusMessage.value = "Sesión cerrada correctamente (modo invitado)"
     }
 
     fun scheduleCalendarEvent(context: Context, section: BibleSection) {

@@ -113,6 +113,7 @@ fun ProfileScreen(
     val userEmail by viewModel.userEmail.collectAsState()
     val statusMsg by viewModel.authStatusMessage.collectAsState()
     val isAgentBusy by viewModel.isSocialAgentBusy.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showAddCuriosityDialog by remember { mutableStateOf(false) }
@@ -149,6 +150,7 @@ fun ProfileScreen(
     }
 
     val confirmedCount = outings.count { it.outingStatus == OutingStatus.CONFIRMED }
+    val hasActiveGroup = profile.groupId.isNotBlank() || profile.groupInviteCode.isNotBlank()
 
     Column(
         modifier = modifier
@@ -219,6 +221,25 @@ fun ProfileScreen(
             }
         }
 
+        // Honest Guest Demo or Cloud Error indicator
+        if (syncState.isGuestDemo) {
+            EditorialDemoModeBanner(
+                detail = "Estás viendo datos de demostración locales. Inicia sesión con Google para empezar con tu cuenta real."
+            )
+        } else {
+            val profileErr = syncState.profileState as? com.example.data.CloudLoadState.Error
+            val groupErr = syncState.groupState as? com.example.data.CloudLoadState.Error
+            val activeErr = profileErr ?: groupErr
+            if (activeErr != null) {
+                EditorialCloudErrorCard(
+                    title = "Error al cargar desde la nube",
+                    message = activeErr.message,
+                    onRetry = { viewModel.refreshCloudData() },
+                    compact = true
+                )
+            }
+        }
+
         // --- 2. IDENTITY & METRICS CARD (React Bits Spotlight Card + CountUp) ---
         AnimatedStaggeredItem(index = 0) {
             SpotlightEditorialCard(modifier = Modifier.fillMaxWidth()) {
@@ -256,7 +277,7 @@ fun ProfileScreen(
                                     )
                                 } else {
                                     Text(
-                                        text = profile.username.take(1).uppercase(),
+                                        text = profile.username.ifBlank { "U" }.take(1).uppercase(),
                                         style = MaterialTheme.typography.headlineMedium,
                                         fontFamily = FontFamily.Serif,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -283,19 +304,19 @@ fun ProfileScreen(
 
                         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
-                                text = "@${profile.username}",
+                                text = "@${profile.username.ifBlank { "usuario" }}",
                                 style = MaterialTheme.typography.titleLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = profile.groupName,
+                                text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" } else "Sin grupo activo",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.secondary
+                                color = if (hasActiveGroup) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = profile.bio,
+                                text = profile.bio.ifBlank { "Toca el lápiz para añadir tu biografía." },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -436,71 +457,96 @@ fun ProfileScreen(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                if (hasActiveGroup) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            EditorialIconBadge(icon = Icons.Default.Groups)
+                            Column {
+                                Text(
+                                    text = profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Código ${profile.groupInviteCode}  •  ${groupMembers.size} miembros",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (profile.groupInviteCode.isNotBlank()) {
+                            Row {
+                                IconButton(
+                                    onClick = {
+                                        clipboard.setText(AnnotatedString(profile.groupInviteCode))
+                                        Toast.makeText(context, "Código copiado: ${profile.groupInviteCode}", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copiar código", modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(
+                                                Intent.EXTRA_TEXT,
+                                                "Únete a nuestro grupo '${profile.groupName}' en Adora con el código: ${profile.groupInviteCode}"
+                                            )
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, "Invitar al grupo"))
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = "Compartir código", modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    if (groupMembers.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            groupMembers.forEach { member ->
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Text(
+                                        text = member,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         EditorialIconBadge(icon = Icons.Default.Groups)
-                        Column {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = profile.groupName,
-                                style = MaterialTheme.typography.titleMedium,
+                                text = "Aún no perteneces a un grupo",
+                                style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Código ${profile.groupInviteCode}  •  ${groupMembers.size} miembros",
+                                text = "Crea un grupo propio o únete con un código de invitación para compartir salidas, mapa y chat.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Row {
-                        IconButton(
-                            onClick = {
-                                clipboard.setText(AnnotatedString(profile.groupInviteCode))
-                                Toast.makeText(context, "Código copiado: ${profile.groupInviteCode}", Toast.LENGTH_SHORT).show()
-                            }
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copiar código", modifier = Modifier.size(18.dp))
-                        }
-                        IconButton(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(
-                                        Intent.EXTRA_TEXT,
-                                        "Únete a nuestro grupo '${profile.groupName}' en Adora con el código: ${profile.groupInviteCode}"
-                                    )
-                                }
-                                context.startActivity(Intent.createChooser(intent, "Invitar al grupo"))
-                            }
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = "Compartir código", modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    groupMembers.forEach { member ->
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
-                        ) {
-                            Text(
-                                text = member,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                             )
                         }
                     }
@@ -548,35 +594,44 @@ fun ProfileScreen(
             }
         )
         EditorialCard(modifier = Modifier.fillMaxWidth()) {
-            FlowRow(
-                modifier = Modifier.padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                profile.curiosities.forEach { item ->
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            if (profile.curiosities.isEmpty()) {
+                Text(
+                    text = "Aún no has añadido intereses. Pulsa «Añadir» para personalizar tu perfil.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp)
+                )
+            } else {
+                FlowRow(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    profile.curiosities.forEach { item ->
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
-                            Text(
-                                text = item,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Quitar",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .clickable { viewModel.removeCuriosity(item) }
-                            )
+                            Row(
+                                modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = item,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Quitar",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .clickable { viewModel.removeCuriosity(item) }
+                                )
+                            }
                         }
                     }
                 }
@@ -600,12 +655,12 @@ fun ProfileScreen(
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isLoggedIn) "Cuenta sincronizada" else "Modo local sin cuenta",
+                            text = if (isLoggedIn) "Cuenta sincronizada" else "Modo invitado (demo local)",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (isLoggedIn) userEmail else "Conecta Google para sincronizar grupos y salidas en tiempo real.",
+                            text = if (isLoggedIn) userEmail else "Conecta Google para cargar tus datos reales y sincronizar grupos en tiempo real.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -623,13 +678,13 @@ fun ProfileScreen(
                 if (isLoggedIn) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
-                            onClick = { viewModel.handleSyncWithFirebase() },
+                            onClick = { viewModel.refreshCloudData() },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f).height(44.dp)
                         ) {
                             Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Sincronizar", style = MaterialTheme.typography.labelMedium)
+                            Text("Actualizar", style = MaterialTheme.typography.labelMedium)
                         }
                         OutlinedButton(
                             onClick = {
@@ -652,7 +707,7 @@ fun ProfileScreen(
                             onGoogleSignInClicked(
                                 context = context,
                                 credentialManager = credentialManager,
-                                onAuthSuccess = { viewModel.handleSyncWithFirebase() },
+                                onAuthSuccess = { viewModel.refreshCloudData() },
                                 onAuthError = { err ->
                                     viewModel.authStatusMessage.value = err
                                     Toast.makeText(context, err, Toast.LENGTH_LONG).show()

@@ -179,6 +179,8 @@ fun World1MapScreen(viewModel: MainViewModel) {
     val outings by viewModel.outings.collectAsState()
     val selectedFromExternal by viewModel.selectedOutingForDetail.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
+    val outingsLoadState = syncState.outingsState
 
     val hasValidMapsApiKey = remember {
         BuildConfig.MAPS_API_KEY.isNotBlank() &&
@@ -497,6 +499,59 @@ fun World1MapScreen(viewModel: MainViewModel) {
                     }
                 }
 
+                if (syncState.isGuestDemo) {
+                    item {
+                        EditorialDemoModeBanner(
+                            detail = "Ubicaciones de demostración locales (modo invitado)."
+                        )
+                    }
+                }
+
+                when {
+                    outingsLoadState is com.example.data.CloudLoadState.Loading && outings.isEmpty() -> {
+                        item {
+                            EditorialCloudLoadingCard(label = "Cargando ubicaciones de tus salidas…")
+                        }
+                    }
+                    outingsLoadState is com.example.data.CloudLoadState.Error && outings.isEmpty() -> {
+                        item {
+                            EditorialCloudErrorCard(
+                                title = "No se pudieron cargar las ubicaciones",
+                                message = outingsLoadState.message,
+                                onRetry = { viewModel.refreshCloudData() }
+                            )
+                        }
+                    }
+                    com.example.data.SocialSessionPolicy.shouldShowEmptyState(outingsLoadState, outings.size) -> {
+                        item {
+                            EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text("Aún no hay salidas en el mapa", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        "Crea tu primera salida en la pestaña Salidas para fijar su destino y punto de encuentro.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (outingsLoadState is com.example.data.CloudLoadState.Error && outings.isNotEmpty()) {
+                    item {
+                        EditorialCloudErrorCard(
+                            title = "Error al actualizar ubicaciones",
+                            message = outingsLoadState.message,
+                            onRetry = { viewModel.refreshCloudData() },
+                            compact = true
+                        )
+                    }
+                }
+
                 items(outings, key = { it.id }) { outing ->
                     val statusColor = when (outing.outingStatus) {
                         OutingStatus.CONFIRMED -> StatusConfirmedGreen
@@ -620,6 +675,19 @@ fun World1MapScreen(viewModel: MainViewModel) {
                         Text(if (isSearching) "..." else "Ir", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+
+            if (hasValidMapsApiKey && syncState.isGuestDemo) {
+                EditorialDemoModeBanner(
+                    detail = "Mapa con salidas de demostración locales (modo invitado)."
+                )
+            } else if (hasValidMapsApiKey && outingsLoadState is com.example.data.CloudLoadState.Error) {
+                EditorialCloudErrorCard(
+                    title = "Error al cargar salidas en el mapa",
+                    message = outingsLoadState.message,
+                    onRetry = { viewModel.refreshCloudData() },
+                    compact = true
+                )
             }
 
             // Mode Toggle: Destination vs Meeting Point

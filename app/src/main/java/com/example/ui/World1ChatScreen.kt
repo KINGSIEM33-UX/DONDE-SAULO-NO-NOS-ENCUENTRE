@@ -98,6 +98,9 @@ fun World1ChatScreen(viewModel: MainViewModel) {
     val outings by viewModel.outings.collectAsState()
     val members by viewModel.groupMembers.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
+    val chatLoadState = syncState.chatState
+    val hasActiveGroup = profile.groupId.isNotBlank() || profile.groupInviteCode.isNotBlank()
 
     var inputText by remember { mutableStateOf("") }
     var isRecordingAudio by remember { mutableStateOf(false) }
@@ -405,7 +408,7 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                     )
                     Column {
                         Text(
-                            text = profile.groupName,
+                            text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" } else "Chat personal",
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -417,10 +420,14 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(StatusConfirmedGreen)
+                                    .background(if (hasActiveGroup) StatusConfirmedGreen else MaterialTheme.colorScheme.outline)
                             )
                             Text(
-                                text = "${members.size} miembros  •  ${profile.groupInviteCode}",
+                                text = if (hasActiveGroup) {
+                                    "${members.size} miembros  •  ${profile.groupInviteCode}"
+                                } else {
+                                    "Crea o únete a un grupo en Inicio para chatear juntos"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -446,6 +453,13 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                 }
             }
             androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+
+        if (syncState.isGuestDemo) {
+            EditorialDemoModeBanner(
+                detail = "Mensajes de demostración locales (modo invitado).",
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            )
         }
 
         // Status banner for voice/dictation feedback
@@ -489,17 +503,52 @@ fun World1ChatScreen(viewModel: MainViewModel) {
             contentPadding = PaddingValues(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (messages.isEmpty()) {
+            if (chatLoadState is com.example.data.CloudLoadState.Error && messages.isNotEmpty()) {
                 item {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Aún no hay mensajes en este grupo.\n¡Envía un mensaje o nota de voz para empezar! 💬",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+                    EditorialCloudErrorCard(
+                        title = "Error al actualizar el chat",
+                        message = chatLoadState.message,
+                        onRetry = { viewModel.refreshCloudData() },
+                        compact = true
+                    )
+                }
+            }
+
+            when {
+                chatLoadState is com.example.data.CloudLoadState.Loading && messages.isEmpty() -> {
+                    item {
+                        EditorialCloudLoadingCard(label = "Cargando mensajes desde la nube…")
+                    }
+                }
+                chatLoadState is com.example.data.CloudLoadState.Error && messages.isEmpty() -> {
+                    item {
+                        EditorialCloudErrorCard(
+                            title = "No se pudieron cargar los mensajes",
+                            message = chatLoadState.message,
+                            onRetry = { viewModel.refreshCloudData() }
                         )
+                    }
+                }
+                com.example.data.SocialSessionPolicy.shouldShowEmptyState(chatLoadState, messages.size) -> {
+                    item {
+                        EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Aún no hay mensajes",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Envía un mensaje de texto o una nota de voz para iniciar la conversación.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }

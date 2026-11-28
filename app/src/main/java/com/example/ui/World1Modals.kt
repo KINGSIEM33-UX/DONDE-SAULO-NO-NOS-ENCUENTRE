@@ -118,6 +118,8 @@ fun CameraAndStoriesModal(
     val stories by viewModel.stories.collectAsState()
     val outings by viewModel.outings.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
+    val storiesLoadState = syncState.storiesState
 
     var activeStoryIndex by remember { mutableIntStateOf(-1) }
     var showCreateStorySheet by remember { mutableStateOf(false) }
@@ -276,13 +278,31 @@ fun CameraAndStoriesModal(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (syncState.isGuestDemo) {
+                        EditorialDemoModeBanner(
+                            detail = "Instantáneas y álbum de demostración locales (modo invitado)."
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    } else if (storiesLoadState is com.example.data.CloudLoadState.Error) {
+                        EditorialCloudErrorCard(
+                            title = "No se pudieron cargar las instantáneas",
+                            message = storiesLoadState.message,
+                            onRetry = { viewModel.refreshCloudData() },
+                            compact = true
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    } else if (storiesLoadState is com.example.data.CloudLoadState.Loading && stories.isEmpty()) {
+                        EditorialCloudLoadingCard(label = "Cargando instantáneas desde la nube…")
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
 
                     // --- INSTANTÁNEAS (STORIES) SECTION ---
                     Text(
-                        text = "Instantáneas del Grupo ✨",
+                        text = "Instantáneas del Grupo",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -850,6 +870,8 @@ fun OutingHistoryModal(
     onDismiss: () -> Unit
 ) {
     val outings by viewModel.outings.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
+    val outingsLoadState = syncState.outingsState
     var filterQuery by remember { mutableStateOf("") }
 
     val filtered = remember(outings, filterQuery) {
@@ -869,7 +891,7 @@ fun OutingHistoryModal(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text("Historial Completo de Salidas", fontWeight = FontWeight.Black)
+                Text("Historial Completo de Salidas", fontWeight = FontWeight.SemiBold)
             }
         },
         text = {
@@ -877,6 +899,11 @@ fun OutingHistoryModal(
                 modifier = Modifier.fillMaxWidth().height(420.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                if (syncState.isGuestDemo) {
+                    EditorialDemoModeBanner(
+                        detail = "Historial de demostración local (modo invitado)."
+                    )
+                }
                 Text(
                     text = "Archivo histórico de todas las salidas por año, mes y día (${filtered.size} registros):",
                     style = MaterialTheme.typography.bodySmall
@@ -888,36 +915,71 @@ fun OutingHistoryModal(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    items(filtered, key = { it.id }) { item ->
-                        val stColor = when (item.outingStatus) {
-                            OutingStatus.CONFIRMED -> StatusConfirmedGreen
-                            OutingStatus.PLANNED -> StatusPlannedGray
-                            OutingStatus.CANCELLED -> StatusCancelledRed
+                when {
+                    outingsLoadState is com.example.data.CloudLoadState.Loading && filtered.isEmpty() -> {
+                        EditorialCloudLoadingCard(label = "Cargando historial desde la nube…")
+                    }
+                    outingsLoadState is com.example.data.CloudLoadState.Error && filtered.isEmpty() -> {
+                        EditorialCloudErrorCard(
+                            title = "No se pudo cargar el historial",
+                            message = outingsLoadState.message,
+                            onRetry = { viewModel.refreshCloudData() }
+                        )
+                    }
+                    com.example.data.SocialSessionPolicy.shouldShowEmptyState(outingsLoadState, filtered.size) -> {
+                        EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = if (filterQuery.isBlank()) "Todavía no tienes salidas registradas." else "No hay coincidencias para \"$filterQuery\".",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp)
+                            )
                         }
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.5.dp, stColor)
+                    }
+                    else -> {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "${item.dateIso} (${item.time}) • ${item.outingStatus.label}",
-                                    color = stColor,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
-                                )
-                                Text(
-                                    text = item.title,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 15.sp
-                                )
-                                Text(
-                                    text = "📍 ${item.location} | 💶 ${item.budgetPerPerson}",
-                                    fontSize = 12.sp
-                                )
+                            if (outingsLoadState is com.example.data.CloudLoadState.Error) {
+                                item {
+                                    EditorialCloudErrorCard(
+                                        title = "Error al actualizar historial",
+                                        message = outingsLoadState.message,
+                                        onRetry = { viewModel.refreshCloudData() },
+                                        compact = true
+                                    )
+                                }
+                            }
+                            items(filtered, key = { it.id }) { item ->
+                                val stColor = when (item.outingStatus) {
+                                    OutingStatus.CONFIRMED -> StatusConfirmedGreen
+                                    OutingStatus.PLANNED -> StatusPlannedGray
+                                    OutingStatus.CANCELLED -> StatusCancelledRed
+                                }
+                                Card(
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, stColor)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "${item.dateIso} (${item.time}) • ${item.outingStatus.label}",
+                                            color = stColor,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        )
+                                        Text(
+                                            text = item.title,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 15.sp
+                                        )
+                                        Text(
+                                            text = "${item.location}  •  ${item.budgetPerPerson.ifBlank { "Sin coste" }}",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

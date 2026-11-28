@@ -116,14 +116,14 @@ data class SocialGroup(
 data class UserProfile(
     @DocumentId val id: String = "",
     val userId: String = "",
-    val username: String = "Explorador",
-    val bio: String = "Listo para la próxima salida con el grupo ✨",
-    val avatarUrl: String = "avatar_sunset",
-    val curiosities: List<String> = listOf("🍕 Pizza lover", "🎮 Gamer de noche", "🏔️ Senderismo", "🎶 Música en vivo"),
-    val groupId: String = "QUEDA-2026",
-    val groupInviteCode: String = "QUEDA-2026",
-    val groupName: String = "Peña Los Inseparables",
-    val gamesHighScore: Long = 120L,
+    val username: String = "",
+    val bio: String = "",
+    val avatarUrl: String = "",
+    val curiosities: List<String> = emptyList(),
+    val groupId: String = "",
+    val groupInviteCode: String = "",
+    val groupName: String = "",
+    val gamesHighScore: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -134,9 +134,9 @@ data class UserProfile(
             "bio" to bio.take(300),
             "avatarUrl" to avatarUrl.take(500),
             "curiosities" to curiosities.take(20).map { it.take(500) },
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
-            "groupInviteCode" to groupInviteCode.take(32).ifBlank { "QUEDA-2026" },
-            "groupName" to groupName.take(80).ifBlank { "Mi Grupo" },
+            "groupId" to groupId.trim().take(128),
+            "groupInviteCode" to groupInviteCode.trim().take(32),
+            "groupName" to groupName.trim().take(80),
             "gamesHighScore" to gamesHighScore.coerceAtLeast(0L),
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
@@ -149,9 +149,9 @@ data class UserProfile(
             "bio" to bio.take(300),
             "avatarUrl" to avatarUrl.take(500),
             "curiosities" to curiosities.take(20).map { it.take(500) },
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
-            "groupInviteCode" to groupInviteCode.take(32).ifBlank { "QUEDA-2026" },
-            "groupName" to groupName.take(80).ifBlank { "Mi Grupo" },
+            "groupId" to groupId.trim().take(128),
+            "groupInviteCode" to groupInviteCode.trim().take(32),
+            "groupName" to groupName.trim().take(80),
             "gamesHighScore" to gamesHighScore.coerceAtLeast(0L),
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -162,15 +162,15 @@ data class UserProfile(
 data class Outing(
     @DocumentId val id: String = "",
     val ownerId: String = "",
-    val groupId: String = "QUEDA-2026",
+    val groupId: String = "",
     val title: String = "",
     val location: String = "",
     val meetingPoint: String = "",
     val dateIso: String = "", // YYYY-MM-DD
     val time: String = "19:00",
     val status: String = OutingStatus.CONFIRMED.name,
-    val budgetPerPerson: String = "15 €",
-    val kitItems: String = "", // "Kit de la Quedada"
+    val budgetPerPerson: String = "",
+    val kitItems: String = "",
     val additionalInfo: String = "",
     val placePhotoUrl: String = "preset_plaza",
     val destLat: Double = 40.4168,
@@ -205,9 +205,10 @@ data class Outing(
         } else {
             rsvpByUser
         }
+        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
         return mapOf(
             "ownerId" to uid,
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
+            "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
             "meetingPoint" to meetingPoint.take(200),
@@ -234,8 +235,9 @@ data class Outing(
     }
 
     fun toUpdateMap(): Map<String, Any> {
+        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, ownerId)
         return mapOf(
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
+            "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
             "meetingPoint" to meetingPoint.take(200),
@@ -266,7 +268,7 @@ data class GroupChatMessage(
     @DocumentId val id: String = "",
     val senderId: String = "",
     val senderName: String = "",
-    val groupId: String = "QUEDA-2026",
+    val groupId: String = "",
     val text: String = "",
     val messageType: String = "TEXT", // TEXT, VOICE, OUTING_SHARE, STORY_REACTION
     val audioDurationSec: Long = 0L,
@@ -284,10 +286,11 @@ data class GroupChatMessage(
         } else {
             "TEXT"
         }
+        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
         return mapOf(
             "senderId" to uid,
             "senderName" to senderName.take(80).ifBlank { "Miembro" },
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
+            "groupId" to effectiveGroupId,
             "text" to text.take(1000),
             "messageType" to validType,
             "audioDurationSec" to audioDurationSec.coerceAtLeast(0L),
@@ -307,22 +310,23 @@ data class OutingStory(
     @DocumentId val id: String = "",
     val authorId: String = "",
     val authorName: String = "",
-    val groupId: String = "QUEDA-2026",
+    val groupId: String = "",
     val caption: String = "",
-    val filterStyle: String = "NEON_VIBES",
+    val filterStyle: String = "OBSIDIAN",
     val mediaUri: String = "story_sunset",
-    val outingTitle: String = "Quedada en grupo",
+    val outingTitle: String = "Salida en grupo",
     val likesCount: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     fun toCreateMap(uid: String): Map<String, Any> {
+        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
         return mapOf(
             "authorId" to uid,
             "authorName" to authorName.take(80).ifBlank { "Miembro" },
-            "groupId" to groupId.take(128).ifBlank { "QUEDA-2026" },
+            "groupId" to effectiveGroupId,
             "caption" to caption.take(300),
-            "filterStyle" to filterStyle.take(40).ifBlank { "NEON_VIBES" },
+            "filterStyle" to filterStyle.take(40).ifBlank { "OBSIDIAN" },
             "mediaUri" to mediaUri.take(500).ifBlank { "story_sunset" },
             "outingTitle" to outingTitle.take(120),
             "likesCount" to likesCount.coerceAtLeast(0L),

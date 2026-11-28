@@ -98,6 +98,8 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     val stories by viewModel.stories.collectAsState()
     val defaultCurrency by viewModel.defaultCurrency.collectAsState()
     val currentUserId by viewModel.currentUserId.collectAsState()
+    val syncState by viewModel.socialSyncState.collectAsState()
+    val outingsLoadState = syncState.outingsState
 
     val todayCal = remember { Calendar.getInstance() }
     val todayIso = remember { todayIsoDate() }
@@ -187,6 +189,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                 )
                             }
                         }
+                    }
+
+                    if (syncState.isGuestDemo) {
+                        EditorialDemoModeBanner(
+                            detail = "Salidas de demostración locales. Conecta Google en Inicio para guardar tus salidas reales.",
+                            actionLabel = "Inicio",
+                            onActionClick = { viewModel.world1Tab.value = "profile" }
+                        )
                     }
 
                     // Subtle secondary metadata strip
@@ -400,40 +410,68 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 )
             }
 
-            if (upcomingOutings.isEmpty()) {
+            if (outingsLoadState is com.example.data.CloudLoadState.Error && upcomingOutings.isNotEmpty()) {
                 item {
-                    EditorialCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text("No hay salidas programadas", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Toca un día del calendario o el botón '+' para crear un nuevo encuentro.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
-                            )
+                    EditorialCloudErrorCard(
+                        title = "Error al actualizar salidas",
+                        message = outingsLoadState.message,
+                        onRetry = { viewModel.refreshCloudData() },
+                        compact = true
+                    )
+                }
+            }
+
+            when {
+                outingsLoadState is com.example.data.CloudLoadState.Loading && upcomingOutings.isEmpty() -> {
+                    item {
+                        EditorialCloudLoadingCard(label = "Cargando tus salidas desde la nube…")
+                    }
+                }
+                outingsLoadState is com.example.data.CloudLoadState.Error && upcomingOutings.isEmpty() -> {
+                    item {
+                        EditorialCloudErrorCard(
+                            title = "No se pudieron cargar tus salidas",
+                            message = outingsLoadState.message,
+                            onRetry = { viewModel.refreshCloudData() }
+                        )
+                    }
+                }
+                com.example.data.SocialSessionPolicy.shouldShowEmptyState(outingsLoadState, upcomingOutings.size) -> {
+                    item {
+                        EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("No hay salidas programadas", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Toca un día del calendario o el botón '+' para crear un nuevo encuentro.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
-            } else {
-                itemsIndexed(upcomingOutings, key = { _, o -> o.id }) { index, outing ->
-                    AnimatedStaggeredItem(index = index) {
-                        EditorialOutingCard(
-                            outing = outing,
-                            currentUserId = currentUserId,
-                            onCardClick = { activeDetailOuting = outing },
-                            onEditClick = {
-                                editingOuting = outing
-                                preselectedDateIso = outing.dateIso
-                                showOutingFormDialog = true
-                            },
-                            onRsvpSelected = { rsvpChoice ->
-                                viewModel.updateOutingRsvp(outing.id, rsvpChoice)
-                            }
-                        )
+                else -> {
+                    itemsIndexed(upcomingOutings, key = { _, o -> o.id }) { index, outing ->
+                        AnimatedStaggeredItem(index = index) {
+                            EditorialOutingCard(
+                                outing = outing,
+                                currentUserId = currentUserId,
+                                onCardClick = { activeDetailOuting = outing },
+                                onEditClick = {
+                                    editingOuting = outing
+                                    preselectedDateIso = outing.dateIso
+                                    showOutingFormDialog = true
+                                },
+                                onRsvpSelected = { rsvpChoice ->
+                                    viewModel.updateOutingRsvp(outing.id, rsvpChoice)
+                                }
+                            )
+                        }
                     }
                 }
             }
