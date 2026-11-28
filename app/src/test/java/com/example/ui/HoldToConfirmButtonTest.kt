@@ -6,10 +6,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.hasRole
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.performSemanticsAction
 import com.example.ui.theme.MyApplicationTheme
 import org.junit.Assert.assertEquals
@@ -43,7 +41,12 @@ class HoldToConfirmButtonTest {
         }
 
         val button = composeTestRule.onNode(hasText(label))
-        button.assert(hasRole(Role.Button))
+        button.assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.Role,
+                Role.Button
+            )
+        )
         button.assert(
             SemanticsMatcher.expectValue(
                 SemanticsProperties.StateDescription,
