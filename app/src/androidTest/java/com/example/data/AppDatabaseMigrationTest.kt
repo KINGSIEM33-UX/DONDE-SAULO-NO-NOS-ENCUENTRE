@@ -31,6 +31,7 @@ class AppDatabaseMigrationTest {
 
             assertLegacyRowsPreserved(db)
             assertEquals(8, db.version)
+            assertEquals(1, count(db, "study_events"))
             database.close()
         } finally {
             context.deleteDatabase(name)
@@ -50,7 +51,7 @@ class AppDatabaseMigrationTest {
 
             assertLegacyRowsPreserved(db)
             assertEquals(8, db.version)
-            assertEquals(1, count(db, "study_events"))
+            assertEquals(0, count(db, "study_events"))
             database.close()
         } finally {
             context.deleteDatabase(name)
@@ -99,6 +100,7 @@ class AppDatabaseMigrationTest {
 
                     override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
                 })
+                .build()
         )
         helper.writableDatabase
         helper.close()
@@ -174,11 +176,15 @@ class AppDatabaseMigrationTest {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
                 })
+                .build()
         )
         val db = helper.writableDatabase
         db.execSQL("INSERT INTO verse_notes(sectionId, verseReference, noteText, timestamp) VALUES ('JHN.3', 'Juan 3:16', 'nota legacy', 1)")
         db.execSQL("INSERT INTO favorite_verses(sectionId, verseReference, verseText, timestamp) VALUES ('JHN.3', 'Juan 3:16', 'texto legacy', 2)")
         db.execSQL("INSERT INTO recent_chapters(chapterId, bibleId, reference, timestamp) VALUES ('JHN.3', 'RVR1960', 'Juan 3', 3)")
+        if (version >= 7) {
+            db.execSQL("INSERT INTO study_events(title, details, dateIso, time, completed, createdAt) VALUES ('Estudio legacy', '', '2026-11-28', '19:00', 0, 4)")
+        }
         helper.close()
     }
 
