@@ -101,6 +101,7 @@ fun World1ChatScreen(viewModel: MainViewModel) {
     val syncState by viewModel.socialSyncState.collectAsState()
     val chatLoadState = syncState.chatState
     val hasActiveGroup = profile.groupId.isNotBlank() || profile.groupInviteCode.isNotBlank()
+    val nextOuting = remember(outings) { nextUpcomingOuting(outings) }
 
     var inputText by remember { mutableStateOf("") }
     var isRecordingAudio by remember { mutableStateOf(false) }
@@ -447,7 +448,7 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                     }
                 }
 
-                outings.firstOrNull()?.let { nextOuting ->
+                nextOuting?.let { nextOuting ->
                     IconButton(
                         onClick = { viewModel.shareOutingToGroupChat(nextOuting) },
                         modifier = Modifier
@@ -462,7 +463,11 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                }
+                } ?: Text(
+                    text = "Sin próximas salidas",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }

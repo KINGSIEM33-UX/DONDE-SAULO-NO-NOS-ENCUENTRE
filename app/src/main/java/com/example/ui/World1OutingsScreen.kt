@@ -110,6 +110,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     var editingOuting by remember { mutableStateOf<Outing?>(null) }
     var preselectedDateIso by remember { mutableStateOf(todayIso) }
     var activeDetailOuting by remember { mutableStateOf<Outing?>(null) }
+    var outingsForSelection by remember { mutableStateOf<List<Outing>?>(null) }
 
     val monthOutingsMap = remember(outings, displayedYear, displayedMonthZeroIndexed) {
         val prefix = "%04d-%02d-".format(displayedYear, displayedMonthZeroIndexed + 1)
@@ -355,12 +356,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                             isToday = dateIso == todayIso,
                                             modifier = Modifier.weight(1f),
                                             onClick = {
-                                                if (primaryOuting != null) {
-                                                    activeDetailOuting = primaryOuting
-                                                } else {
-                                                    editingOuting = null
-                                                    preselectedDateIso = dateIso
-                                                    showOutingFormDialog = true
+                                                when {
+                                                    dayOutings.size > 1 -> outingsForSelection = dayOutings.sortedWith(compareBy({ it.dateIso }, { it.time }, { it.id }))
+                                                    primaryOuting != null -> activeDetailOuting = primaryOuting
+                                                    else -> {
+                                                        editingOuting = null
+                                                        preselectedDateIso = dateIso
+                                                        showOutingFormDialog = true
+                                                    }
                                                 }
                                             }
                                         )
@@ -500,6 +503,40 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 modifier = Modifier.size(24.dp)
             )
         }
+    }
+
+    outingsForSelection?.let { choices ->
+        AlertDialog(
+            onDismissRequest = { outingsForSelection = null },
+            title = { Text("Elige una salida") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    choices.forEach { outing ->
+                        OutlinedButton(
+                            onClick = {
+                                outingsForSelection = null
+                                activeDetailOuting = outing
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("choose_outing_${outing.id}")
+                        ) {
+                            Column(horizontalAlignment = Alignment.Start, modifier = Modifier.fillMaxWidth()) {
+                                Text(outing.title.ifBlank { "Salida en grupo" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    text = "${outing.time} • ${outing.location.ifBlank { "Sin lugar" }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { outingsForSelection = null }) { Text("Cancelar") }
+            }
+        )
     }
 
     // --- QUICK DETAIL & RSVP DIALOG ---
