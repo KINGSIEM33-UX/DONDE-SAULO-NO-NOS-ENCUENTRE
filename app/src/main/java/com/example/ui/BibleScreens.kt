@@ -543,7 +543,9 @@ fun BibleReaderScreen(
                         }
                     }
                 }
-                return@Column
+                if (isSearchLoading || searchError != null || bibleSearchResults != null) {
+                    return@Column
+                }
             }
 
             when {
