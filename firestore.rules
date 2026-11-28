@@ -502,9 +502,11 @@ service cloud.firestore {
       // Query rules cannot prove a dynamic createdAt >= parent.createdAt comparison
       // for every candidate in a groupId-only list. The client adds that boundary;
       // direct get remains generation-fenced to prevent privileged-ID reuse access.
+      // Fail closed: Rules cannot inspect a query's where clauses per candidate or
+      // prove resource.createdAt against the current parent generation. A groupId-only
+      // list would therefore disclose historical content after ID reuse.
       allow list: if isSignedIn() &&
-                     (('ownerId' in resource.data && resource.data.ownerId == request.auth.uid) ||
-                      (('groupId' in resource.data) && isGroupMember(resource.data.groupId)));
+                     ('ownerId' in resource.data && resource.data.ownerId == request.auth.uid);
 
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
@@ -562,9 +564,8 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(messageId) &&
                     (existing().senderId == request.auth.uid ||
                      (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
-      allow list: if isSignedIn() &&
-                     (resource.data.senderId == request.auth.uid ||
-                      (isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
+      // Group list is intentionally denied; use owner/sender scoped reads only.
+      allow list: if isSignedIn() && resource.data.senderId == request.auth.uid;
 
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
@@ -614,9 +615,8 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(storyId) &&
                     (existing().authorId == request.auth.uid ||
                      ('groupId' in existing() && isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
-      allow list: if isSignedIn() &&
-                     (resource.data.authorId == request.auth.uid ||
-                      ('groupId' in resource.data && isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
+      // Group list is intentionally denied; direct story reads remain fenced.
+      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
 
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&

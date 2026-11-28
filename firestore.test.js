@@ -606,11 +606,8 @@ test("Legacy group (QUEDA-2026): preserves existing members & outings, closes se
   // 1. Existing legacy member Bob keeps reading group & legacy outing with ZERO disruption
   await assertSucceeds(bobDb.collection("groups").doc("QUEDA-2026").get());
   await assertSucceeds(bobDb.collection("outings").doc("legacy_outing_1").get());
-  await assertSucceeds(
-    bobDb.collection("outings")
-      .where("groupId", "==", "QUEDA-2026")
-      .where("createdAt", ">=", now)
-      .get()
+  await assertFails(
+    bobDb.collection("outings").where("groupId", "==", "QUEDA-2026").get()
   );
 
   // 2. Outsider Eve knowing QUEDA-2026 CANNOT read group, CANNOT read legacy outing, and CANNOT self-join!
@@ -655,10 +652,7 @@ test("Legacy group (QUEDA-2026): preserves existing members & outings, closes se
   await assertSucceeds(redeemInviteTransactionally(carolDb, TOKEN_LEGACY_NEW, CAROL_UID, "Carol"));
   await assertSucceeds(carolDb.collection("groups").doc("QUEDA-2026").get());
   await assertSucceeds(carolDb.collection("outings").doc("legacy_outing_1").get());
-  await assertSucceeds(
-    carolDb.collection("outings")
-      .where("groupId", "==", "QUEDA-2026")
-      .where("createdAt", ">=", now)
-      .get()
+  await assertFails(
+    carolDb.collection("outings").where("groupId", "==", "QUEDA-2026").get()
   );
 });
