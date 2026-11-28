@@ -8,6 +8,7 @@ import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -25,7 +26,9 @@ class Repository(
     val preferences: AppPreferences = AppPreferences(context.applicationContext)
 
     val allSections: Flow<List<BibleSection>> = bibleSectionDao.getAllSections()
-    val allFavoriteVerses: Flow<List<FavoriteVerse>> = favoriteVerseDao.getAllFavoriteVerses()
+    val allFavoriteVerses: Flow<List<FavoriteVerse>> = favoriteVerseDao.getAllFavoriteVerses().map { favorites ->
+        favorites.map(::canonicalizeFavoriteVerse)
+    }
     val recentChapters: Flow<List<RecentChapter>> = recentChapterDao.getRecentChapters()
     val studyEvents: Flow<List<StudyEvent>> = studyEventDao.getAllEvents()
 
@@ -43,14 +46,15 @@ class Repository(
     }
 
     suspend fun insertFavoriteVerse(favoriteVerse: FavoriteVerse) {
-        if (favoriteVerseDao.findByIdentity(favoriteVerse.sectionId, favoriteVerse.bibleId, favoriteVerse.verseReference) == null) {
-            favoriteVerseDao.insertFavoriteVerse(favoriteVerse)
-        }
+        favoriteVerseDao.insertFavoriteVerseIfAbsent(canonicalizeFavoriteVerse(favoriteVerse))
     }
 
     suspend fun deleteFavoriteVerse(id: Int) {
         favoriteVerseDao.deleteFavoriteVerse(id)
     }
+
+    private fun canonicalizeFavoriteVerse(favoriteVerse: FavoriteVerse): FavoriteVerse =
+        favoriteVerse.copy(bibleId = favoriteVerse.bibleId?.let(BibleClient::canonicalBibleId))
 
     fun getVerseNotesForSection(sectionId: String, bibleId: String): Flow<List<VerseNote>> =
         verseNoteDao.getNotesForSection(sectionId, bibleId)

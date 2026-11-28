@@ -678,7 +678,7 @@ fun BibleReaderScreen(
                         }
 
                         // Chapter Notes Section
-                        if (chapterNotes.isNotEmpty()) {
+                        if (chapterNotes.isNotEmpty() || legacyChapterNotes.isNotEmpty()) {
                             item {
                                 Spacer(Modifier.height(12.dp))
                                 HorizontalDivider()
