@@ -14,6 +14,11 @@ enum class ThemeMode {
     VIGILIA
 }
 
+fun socialThemeForWorld1(themeMode: ThemeMode): ThemeMode = when (themeMode) {
+    ThemeMode.SOCIAL_OSCURO, ThemeMode.VIGILIA -> ThemeMode.SOCIAL_OSCURO
+    else -> ThemeMode.SOCIAL_CLARO
+}
+
 private val SocialLightColorScheme = lightColorScheme(
     primary = SocialPrimaryLight,
     onPrimary = SocialOnPrimaryLight,

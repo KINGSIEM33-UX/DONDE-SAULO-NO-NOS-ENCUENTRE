@@ -95,6 +95,8 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.ui.graphics.vector.ImageVector
 
+internal fun localTruthOrDareFallback(dares: List<String>): String = "🔥 RETO:\n\n${dares.random()}"
+
 private data class MiniGameMeta(
     val id: String,
     val title: String,
@@ -1053,7 +1055,7 @@ private fun TruthOrDareGameView(onEarnPoints: (Int) -> Unit) {
                     val aiText = GeminiClient.generateQuickPrompt(
                         "Genera 1 único reto o pregunta de Verdad o Reto divertido, sano y original para un grupo de amigos en una quedada. Responde solo con el texto en español precedido por '✨ IA: '."
                     )
-                    currentCard = aiText ?: "✨ IA: ${dares.random()}"
+                    currentCard = aiText ?: localTruthOrDareFallback(dares)
                     canClaimPoints = true
                     isGeneratingAi = false
                 }

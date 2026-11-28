@@ -35,6 +35,7 @@ import com.example.data.UserProfile
 import com.example.data.VerseNote
 import com.example.data.todayIsoDate
 import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.socialThemeForWorld1
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.auth.FirebaseAuth
@@ -966,8 +967,9 @@ class MainViewModel(
 
     fun switchToWorld1Social() {
         currentWorld.value = AppWorld.WORLD_1_SOCIAL
-        if (themeMode.value != ThemeMode.SOCIAL_CLARO && themeMode.value != ThemeMode.SOCIAL_OSCURO) {
-            updateThemeMode(ThemeMode.SOCIAL_CLARO)
+        val socialTheme = socialThemeForWorld1(themeMode.value)
+        if (themeMode.value != socialTheme) {
+            updateThemeMode(socialTheme)
         }
     }
 
