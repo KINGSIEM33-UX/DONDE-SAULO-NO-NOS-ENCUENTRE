@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -442,6 +443,7 @@ fun World1MainContainer(
                 ) {
                     when (currentTab) {
                         "profile" -> ProfileScreen(viewModel = viewModel)
+                        "feed" -> GroupFeedScreen(viewModel = viewModel)
                         "outings" -> World1OutingsScreen(viewModel = viewModel)
                         "map" -> World1MapScreen(viewModel = viewModel)
                         "chat" -> World1ChatScreen(viewModel = viewModel)
@@ -470,6 +472,7 @@ fun World1BottomBar(
         ) {
             val items = listOf(
                 Triple("profile", "Inicio", Icons.Default.Person),
+                Triple("feed", "Feed", Icons.Default.DynamicFeed),
                 Triple("outings", "Salidas", Icons.Default.DateRange),
                 Triple("map", "Mapa", Icons.Default.Explore),
                 Triple("chat", "Chat", Icons.Default.ChatBubble),
@@ -522,6 +525,7 @@ fun World1NavigationRail(
         Spacer(modifier = Modifier.weight(1f))
         val items = listOf(
             Triple("profile", "Inicio", Icons.Default.Person),
+            Triple("feed", "Feed", Icons.Default.DynamicFeed),
             Triple("outings", "Salidas", Icons.Default.DateRange),
             Triple("map", "Mapa", Icons.Default.Explore),
             Triple("chat", "Chat", Icons.Default.ChatBubble),

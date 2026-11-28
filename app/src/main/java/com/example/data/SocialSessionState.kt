@@ -1,5 +1,7 @@
 package com.example.data
 
+import java.security.MessageDigest
+
 /**
  * Distinguishes whether the Social world is currently showing clearly-labeled
  * local Guest Demo data or real cloud data for an authenticated account.
@@ -76,6 +78,8 @@ object SocialSessionPolicy {
 
     const val GUEST_DEMO_USER_ID = "local_user"
     const val GUEST_DEMO_GROUP_ID = "QUEDA-2026"
+    const val PERSONAL_GROUP_PREFIX = "personal_"
+    private const val MAX_FIRESTORE_ID_LENGTH = 128
 
     val GUEST_DEMO_OUTING_IDS: Set<String> = setOf(
         "outing_upcoming_confirmed",
@@ -154,8 +158,20 @@ object SocialSessionPolicy {
     fun resolveGroupIdForWrite(profileGroupId: String, uid: String): String {
         val cleanGroup = profileGroupId.trim().take(128)
         if (cleanGroup.isNotBlank()) return cleanGroup
-        val safeUid = uid.replace(Regex("[^a-zA-Z0-9_\\-]"), "").take(40).ifBlank { "user" }
-        return "personal_$safeUid"
+        // Keep the contract expected by the personal-scope rules whenever the
+        // Firebase UID itself is a valid Firestore ID component and fits.
+        if (uid.matches(Regex("[a-zA-Z0-9_\\-]+")) &&
+            PERSONAL_GROUP_PREFIX.length + uid.length <= MAX_FIRESTORE_ID_LENGTH
+        ) {
+            return PERSONAL_GROUP_PREFIX + uid
+        }
+
+        // UID formats outside that contract (or an unusually long UID) still
+        // need a stable, collision-resistant ID rather than lossy truncation.
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(uid.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return PERSONAL_GROUP_PREFIX + digest
     }
 
     /**
@@ -170,6 +186,15 @@ object SocialSessionPolicy {
         if (origin != DataOrigin.CLOUD_REAL) return emptyList()
         if (outingsState !is CloudLoadState.Loaded) return emptyList()
         return outings.filterNot { isGuestDemoOuting(it) }
+    }
+
+    /**
+     * Guard used at the actual write boundary. Real outings may be saved while
+     * their collection is loading, but guest/demo records must never cross into
+     * Firestore from an authenticated session.
+     */
+    fun isOutingAllowedForCloudWrite(origin: DataOrigin, outing: Outing): Boolean {
+        return origin == DataOrigin.CLOUD_REAL && !isGuestDemoOuting(outing)
     }
 
     /**

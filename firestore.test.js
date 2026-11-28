@@ -164,3 +164,74 @@ test("Multi-user group: member can read and update shared group outing", async (
   );
 });
 
+function validGroupPost(authorId, groupId, ts, text = "Mensaje privado") {
+  return {
+    authorId,
+    authorName: authorId === ALICE_UID ? "Alice" : "Bob",
+    groupId,
+    text,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+}
+
+test("Group feed: member can query only the selected group", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const now = new Date();
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("FEED-GROUP").set({
+      name: "Feed Test",
+      inviteCode: "FEED-GROUP",
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID],
+      memberNames: { [ALICE_UID]: "Alice" },
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("group_posts").doc("post_1").set(
+      validGroupPost(ALICE_UID, "FEED-GROUP", now)
+    )
+  );
+  await assertSucceeds(
+    aliceDb.collection("group_posts").where("groupId", "==", "FEED-GROUP").get()
+  );
+  await assertFails(aliceDb.collection("group_posts").get());
+});
+
+test("Group feed: non-member cannot read, create, or delete", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const now = new Date();
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("FEED-PRIVATE").set({
+      name: "Private Feed",
+      inviteCode: "FEED-PRIVATE",
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID],
+      memberNames: { [ALICE_UID]: "Alice" },
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("group_posts").doc("post_private").set(
+      validGroupPost(ALICE_UID, "FEED-PRIVATE", now)
+    )
+  );
+  await assertFails(
+    bobDb.collection("group_posts").where("groupId", "==", "FEED-PRIVATE").get()
+  );
+  await assertFails(
+    bobDb.collection("group_posts").doc("post_private").delete()
+  );
+  await assertFails(
+    bobDb.collection("group_posts").doc("post_bob").set(
+      validGroupPost(BOB_UID, "FEED-PRIVATE", now)
+    )
+  );
+  await assertSucceeds(
+    aliceDb.collection("group_posts").doc("post_private").delete()
+  );
+});

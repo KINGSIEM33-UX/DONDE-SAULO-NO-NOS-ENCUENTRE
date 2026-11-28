@@ -76,6 +76,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -126,7 +127,16 @@ fun CameraAndStoriesModal(
     var selectedOutingId by remember(outings) { mutableStateOf(outings.firstOrNull()?.id ?: "") }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var cameraTargetIsStory by remember { mutableStateOf(false) }
-    var draftStoryPhotoUri by remember { mutableStateOf("") }
+    var draftStoryPhotoUri by rememberSaveable { mutableStateOf("") }
+    var draftStoryExpectedUid by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftStoryExpectedGroupId by rememberSaveable { mutableStateOf("") }
+    var draftStoryMediaFailed by rememberSaveable { mutableStateOf(false) }
+    var pendingCameraExpectedUid by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCameraExpectedGroupId by rememberSaveable { mutableStateOf("") }
+    var pendingAlbumExpectedUid by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingAlbumExpectedGroupId by rememberSaveable { mutableStateOf("") }
+    var pendingStoryPickerExpectedUid by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingStoryPickerExpectedGroupId by rememberSaveable { mutableStateOf("") }
 
     val selectedOuting = outings.firstOrNull { it.id == selectedOutingId } ?: outings.firstOrNull()
 
@@ -135,14 +145,21 @@ fun CameraAndStoriesModal(
     ) { uri ->
         if (uri != null && selectedOuting != null) {
             scope.launch {
+                val expectedUid = pendingAlbumExpectedUid
+                val expectedGroupId = pendingAlbumExpectedGroupId
                 val persisted = MediaStorageHelper.persistAndOptionallyUploadImage(
                     context = context,
                     sourceUri = uri,
                     folder = "album",
-                    uid = currentUserId
+                    uid = expectedUid
                 )
-                viewModel.addPhotoToOutingAlbum(selectedOuting.id, persisted)
-                Toast.makeText(context, "Foto guardada en el álbum de '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show()
+                persisted.onSuccess { value ->
+                    viewModel.addPhotoToOutingAlbum(selectedOuting.id, value, expectedUid, expectedGroupId)
+                        .onSuccess { Toast.makeText(context, "Foto guardada en el álbum de '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show() }
+                        .onFailure { error -> Toast.makeText(context, "No se pudo guardar la foto: ${error.localizedMessage ?: "fallo al guardar"}", Toast.LENGTH_LONG).show() }
+                }.onFailure { error ->
+                    Toast.makeText(context, "No se pudo guardar la foto: ${error.localizedMessage ?: "fallo al subirla"}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -152,12 +169,24 @@ fun CameraAndStoriesModal(
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                draftStoryPhotoUri = MediaStorageHelper.persistAndOptionallyUploadImage(
+                val expectedUid = pendingStoryPickerExpectedUid
+                val expectedGroupId = pendingStoryPickerExpectedGroupId
+                val result = MediaStorageHelper.persistAndOptionallyUploadImage(
                     context = context,
                     sourceUri = uri,
                     folder = "stories",
-                    uid = currentUserId
+                    uid = expectedUid
                 )
+                result.onSuccess { value ->
+                    MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+                    draftStoryPhotoUri = value
+                    draftStoryExpectedUid = expectedUid
+                    draftStoryExpectedGroupId = expectedGroupId
+                    draftStoryMediaFailed = false
+                }.onFailure { error ->
+                    draftStoryMediaFailed = true
+                    Toast.makeText(context, "No se pudo preparar la instantánea: ${error.localizedMessage ?: "fallo al subir la foto"}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -168,19 +197,31 @@ fun CameraAndStoriesModal(
         val capturedUri = pendingCameraUri
         if (success && capturedUri != null) {
             scope.launch {
+                val expectedUid = pendingCameraExpectedUid
+                val expectedGroupId = pendingCameraExpectedGroupId
                 val folder = if (cameraTargetIsStory) "stories" else "album"
                 val persisted = MediaStorageHelper.persistAndOptionallyUploadImage(
                     context = context,
                     sourceUri = capturedUri,
                     folder = folder,
-                    uid = currentUserId
+                    uid = expectedUid
                 )
-                if (cameraTargetIsStory) {
-                    draftStoryPhotoUri = persisted
-                    showCreateStorySheet = true
-                } else if (selectedOuting != null) {
-                    viewModel.addPhotoToOutingAlbum(selectedOuting.id, persisted)
-                    Toast.makeText(context, "Captura guardada en '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show()
+                persisted.onSuccess { value ->
+                    if (cameraTargetIsStory) {
+                        MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+                        draftStoryPhotoUri = value
+                        draftStoryExpectedUid = expectedUid
+                        draftStoryExpectedGroupId = expectedGroupId
+                        draftStoryMediaFailed = false
+                        showCreateStorySheet = true
+                    } else if (selectedOuting != null) {
+                        viewModel.addPhotoToOutingAlbum(selectedOuting.id, value, expectedUid, expectedGroupId)
+                            .onSuccess { Toast.makeText(context, "Captura guardada en '${selectedOuting.title}' 📸", Toast.LENGTH_SHORT).show() }
+                            .onFailure { error -> Toast.makeText(context, "No se pudo guardar la captura: ${error.localizedMessage ?: "fallo al guardar"}", Toast.LENGTH_LONG).show() }
+                    }
+                }.onFailure { error ->
+                    if (cameraTargetIsStory) draftStoryMediaFailed = true
+                    Toast.makeText(context, "No se pudo guardar la captura: ${error.localizedMessage ?: "fallo al subirla"}", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -210,6 +251,8 @@ fun CameraAndStoriesModal(
 
     fun requestCameraCapture(forStory: Boolean) {
         cameraTargetIsStory = forStory
+        pendingCameraExpectedUid = currentUserId
+        pendingCameraExpectedGroupId = viewModel.userProfile.value.groupId.ifBlank { viewModel.userProfile.value.groupInviteCode }
         val hasPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (hasPerm) {
             launchRealCamera(forStory)
@@ -219,7 +262,10 @@ fun CameraAndStoriesModal(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+            onDismiss()
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -271,7 +317,10 @@ fun CameraAndStoriesModal(
                             }
                         }
                         IconButton(
-                            onClick = onDismiss,
+                            onClick = {
+                                MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+                                onDismiss()
+                            },
                             modifier = Modifier.size(48.dp).testTag("close_camera_modal_btn")
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Cerrar")
@@ -312,7 +361,11 @@ fun CameraAndStoriesModal(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
                                     .clickable {
+                                        MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
                                         draftStoryPhotoUri = ""
+                                        draftStoryExpectedUid = currentUserId
+                                        draftStoryExpectedGroupId = viewModel.userProfile.value.groupId.ifBlank { viewModel.userProfile.value.groupInviteCode }
+                                        draftStoryMediaFailed = false
                                         showCreateStorySheet = true
                                     }
                                     .testTag("create_new_instantanea_btn")
@@ -427,6 +480,8 @@ fun CameraAndStoriesModal(
                     ) {
                         Button(
                             onClick = {
+                                pendingAlbumExpectedUid = currentUserId
+                                pendingAlbumExpectedGroupId = viewModel.userProfile.value.groupId.ifBlank { viewModel.userProfile.value.groupInviteCode }
                                 mediaPickerLauncher.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
@@ -560,8 +615,8 @@ fun CameraAndStoriesModal(
 
     // Create Story Dialog (supports real camera/gallery photo + filter + caption)
     if (showCreateStorySheet) {
-        var caption by remember { mutableStateOf("") }
-        var selectedFilter by remember { mutableStateOf("NEON_VIBES") }
+        var caption by rememberSaveable { mutableStateOf("") }
+        var selectedFilter by rememberSaveable { mutableStateOf("NEON_VIBES") }
         val filters = listOf(
             "NEON_VIBES" to "Neón ✨",
             "GOLDEN_SUNSET" to "Atardecer 🌅",
@@ -569,7 +624,14 @@ fun CameraAndStoriesModal(
         )
 
         AlertDialog(
-            onDismissRequest = { showCreateStorySheet = false },
+            onDismissRequest = {
+                MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+                draftStoryPhotoUri = ""
+                draftStoryExpectedUid = null
+                draftStoryExpectedGroupId = ""
+                draftStoryMediaFailed = false
+                showCreateStorySheet = false
+            },
             title = { Text("Nueva Instantánea ✨", fontWeight = FontWeight.Black) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -605,6 +667,8 @@ fun CameraAndStoriesModal(
                         }
                         OutlinedButton(
                             onClick = {
+                                pendingStoryPickerExpectedUid = currentUserId
+                                pendingStoryPickerExpectedGroupId = viewModel.userProfile.value.groupId.ifBlank { viewModel.userProfile.value.groupInviteCode }
                                 storyGalleryLauncher.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
@@ -649,23 +713,43 @@ fun CameraAndStoriesModal(
             },
             confirmButton = {
                 Button(
+                    enabled = !draftStoryMediaFailed,
                     onClick = {
-                        viewModel.publishInstantaneaStory(
-                            caption = caption,
-                            filterStyle = selectedFilter,
-                            mediaUri = draftStoryPhotoUri.ifBlank { "story_${System.currentTimeMillis()}" },
-                            outingTitle = selectedOuting?.title ?: "Quedada en grupo"
-                        )
-                        showCreateStorySheet = false
-                        draftStoryPhotoUri = ""
-                        Toast.makeText(context, "Instantánea publicada ✨", Toast.LENGTH_SHORT).show()
+                        val expectedUid = draftStoryExpectedUid
+                        val expectedGroupId = draftStoryExpectedGroupId
+                        scope.launch {
+                            viewModel.publishInstantaneaStory(
+                                caption = caption,
+                                filterStyle = selectedFilter,
+                                mediaUri = draftStoryPhotoUri.ifBlank { "story_${System.currentTimeMillis()}" },
+                                outingTitle = selectedOuting?.title ?: "Quedada en grupo",
+                                expectedUid = expectedUid,
+                                expectedGroupId = expectedGroupId
+                            ).onSuccess {
+                                showCreateStorySheet = false
+                                draftStoryPhotoUri = ""
+                                draftStoryExpectedUid = null
+                                draftStoryExpectedGroupId = ""
+                                draftStoryMediaFailed = false
+                                Toast.makeText(context, "Instantánea publicada ✨", Toast.LENGTH_SHORT).show()
+                            }.onFailure { error ->
+                                Toast.makeText(context, "No se pudo publicar: ${error.localizedMessage ?: "fallo al guardar"}", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 ) {
                     Text("Publicar")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateStorySheet = false }) {
+                TextButton(onClick = {
+                    MediaStorageHelper.deleteOwnedLocalMedia(context, draftStoryPhotoUri)
+                    draftStoryPhotoUri = ""
+                    draftStoryExpectedUid = null
+                    draftStoryExpectedGroupId = ""
+                    draftStoryMediaFailed = false
+                    showCreateStorySheet = false
+                }) {
                     Text("Cancelar")
                 }
             }

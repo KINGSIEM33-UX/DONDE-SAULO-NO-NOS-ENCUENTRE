@@ -14,6 +14,10 @@ import com.example.data.DataOrigin
 import com.example.data.FavoriteVerse
 import com.example.data.GeminiClient
 import com.example.data.GroupChatMessage
+import com.example.data.GroupFeedState
+import com.example.data.GroupFeedStatus
+import com.example.data.GroupPost
+import com.example.data.MediaStorageHelper
 import com.example.data.NotificationHelper
 import com.example.data.Outing
 import com.example.data.OutingStatus
@@ -115,7 +119,22 @@ class MainViewModel(
     private var outingsJob: Job? = null
     private var chatJob: Job? = null
     private var storiesJob: Job? = null
+    private var groupFeedJob: Job? = null
     private var observedGroupId: String? = null
+    private var cloudObserverGeneration = 0L
+    private var cloudSessionGeneration = 0L
+
+    private fun isCurrentCloudObserver(uid: String, generation: Long): Boolean {
+        return generation == cloudObserverGeneration &&
+            currentUserId.value == uid &&
+            socialSyncState.value.origin == DataOrigin.CLOUD_REAL
+    }
+
+    private fun isCurrentCloudSession(uid: String, generation: Long): Boolean {
+        return generation == cloudSessionGeneration &&
+            currentUserId.value == uid &&
+            socialSyncState.value.origin == DataOrigin.CLOUD_REAL
+    }
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         val user = firebaseAuth.currentUser
@@ -150,6 +169,7 @@ class MainViewModel(
                 stopCloudObservers()
                 activeSocialGroup.value = null
                 observedGroupId = null
+                groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
                 socialSyncState.value = SocialSyncSnapshot.forGuestDemo()
             }
         }
@@ -185,6 +205,7 @@ class MainViewModel(
         "Elena"
     )
     val groupMembers = MutableStateFlow(defaultGuestMembers)
+    val groupFeedState = MutableStateFlow(GroupFeedState())
 
     // --- World 1: Outings (Salidas y Quedadas) with dynamic dates relative to today ---
     private val defaultOutings = listOf(
@@ -598,6 +619,7 @@ class MainViewModel(
         outings.value = defaultOutings
         groupChatMessages.value = defaultGroupChat
         stories.value = defaultStories
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
         socialSyncState.value = SocialSyncSnapshot.forGuestDemo()
     }
 
@@ -633,10 +655,12 @@ class MainViewModel(
             return
         }
         stopCloudObservers()
+        val sessionGeneration = cloudSessionGeneration
 
         profileJob = viewModelScope.launch {
             repo.observeUserProfile(uid)
                 .catch { e ->
+                    if (!isCurrentCloudSession(uid, sessionGeneration)) return@catch
                     Log.w("MainViewModel", "Profile observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "tu perfil",
@@ -662,6 +686,7 @@ class MainViewModel(
                     authStatusMessage.value = err.message
                 }
                 .collect { remoteProfile ->
+                    if (!isCurrentCloudSession(uid, sessionGeneration)) return@collect
                     val (resolvedProfile, _) = SocialSessionPolicy.resolveProfileOnCloudEmit(
                         remoteProfile = remoteProfile,
                         uid = uid,
@@ -691,6 +716,8 @@ class MainViewModel(
 
     private fun startPersonalScopedObservers(uid: String) {
         val repo = socialRepository ?: return
+        cloudObserverGeneration += 1
+        val generation = cloudObserverGeneration
         observedGroupId = PERSONAL_SCOPE_SENTINEL
         groupJob?.cancel()
         outingsJob?.cancel()
@@ -710,6 +737,7 @@ class MainViewModel(
         outingsJob = viewModelScope.launch {
             repo.observeOutings(uid)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Personal outings observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "tus salidas",
@@ -721,6 +749,7 @@ class MainViewModel(
                     authStatusMessage.value = err.message
                 }
                 .collect { remoteOutings ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     outings.value = remoteOutings
                     socialSyncState.value = socialSyncState.value.copy(outingsState = CloudLoadState.Loaded)
                 }
@@ -729,6 +758,7 @@ class MainViewModel(
         chatJob = viewModelScope.launch {
             repo.observeChatMessages(uid)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Personal chat observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "los mensajes",
@@ -739,6 +769,7 @@ class MainViewModel(
                     socialSyncState.value = socialSyncState.value.copy(chatState = err)
                 }
                 .collect { remoteMessages ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     groupChatMessages.value = remoteMessages
                     socialSyncState.value = socialSyncState.value.copy(chatState = CloudLoadState.Loaded)
                 }
@@ -747,6 +778,7 @@ class MainViewModel(
         storiesJob = viewModelScope.launch {
             repo.observeStories(uid)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Personal stories observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "las instantáneas",
@@ -757,6 +789,7 @@ class MainViewModel(
                     socialSyncState.value = socialSyncState.value.copy(storiesState = err)
                 }
                 .collect { remoteStories ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     stories.value = remoteStories
                     socialSyncState.value = socialSyncState.value.copy(storiesState = CloudLoadState.Loaded)
                 }
@@ -765,11 +798,14 @@ class MainViewModel(
 
     private fun startGroupScopedObservers(uid: String, groupId: String, profile: UserProfile) {
         val repo = socialRepository ?: return
+        cloudObserverGeneration += 1
+        val generation = cloudObserverGeneration
         observedGroupId = groupId
         groupJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
 
         socialSyncState.value = socialSyncState.value.copy(
             origin = DataOrigin.CLOUD_REAL,
@@ -782,6 +818,7 @@ class MainViewModel(
         groupJob = viewModelScope.launch {
             repo.observeGroup(groupId)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Group observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "el grupo",
@@ -792,6 +829,7 @@ class MainViewModel(
                     socialSyncState.value = socialSyncState.value.copy(groupState = err)
                 }
                 .collect { remoteGroup ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     activeSocialGroup.value = remoteGroup
                     if (remoteGroup != null) {
                         val realMembers = remoteGroup.memberIds.map { memberUid ->
@@ -812,6 +850,7 @@ class MainViewModel(
         outingsJob = viewModelScope.launch {
             repo.observeGroupOutings(groupId)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Group outings observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "las salidas del grupo",
@@ -823,6 +862,7 @@ class MainViewModel(
                     authStatusMessage.value = err.message
                 }
                 .collect { remoteOutings ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     // Real accounts NEVER auto-seed fictional demo outings into Firestore.
                     outings.value = remoteOutings
                     socialSyncState.value = socialSyncState.value.copy(outingsState = CloudLoadState.Loaded)
@@ -832,6 +872,7 @@ class MainViewModel(
         chatJob = viewModelScope.launch {
             repo.observeGroupChatMessages(groupId)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Chat observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "los mensajes del grupo",
@@ -842,6 +883,7 @@ class MainViewModel(
                     socialSyncState.value = socialSyncState.value.copy(chatState = err)
                 }
                 .collect { remoteMessages ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     groupChatMessages.value = remoteMessages
                     socialSyncState.value = socialSyncState.value.copy(chatState = CloudLoadState.Loaded)
                 }
@@ -850,6 +892,7 @@ class MainViewModel(
         storiesJob = viewModelScope.launch {
             repo.observeGroupStories(groupId)
                 .catch { e ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@catch
                     Log.w("MainViewModel", "Stories observer error: ${e.message}")
                     val err = SocialSessionPolicy.resolveErrorState(
                         scopeLabel = "las instantáneas del grupo",
@@ -860,23 +903,53 @@ class MainViewModel(
                     socialSyncState.value = socialSyncState.value.copy(storiesState = err)
                 }
                 .collect { remoteStories ->
+                    if (!isCurrentCloudObserver(uid, generation)) return@collect
                     stories.value = remoteStories
                     socialSyncState.value = socialSyncState.value.copy(storiesState = CloudLoadState.Loaded)
                 }
         }
+
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.LOADING)
+        groupFeedJob = viewModelScope.launch {
+            repo.observeGroupPosts(groupId)
+                .catch { e ->
+                    if (!isCurrentGroupScope(uid, groupId)) return@catch
+                    Log.w("MainViewModel", "Group feed observer error: ${e.message}")
+                    groupFeedState.value = groupFeedState.value.copy(
+                        status = GroupFeedStatus.ERROR,
+                        message = "No se pudo cargar el feed del grupo. Comprueba tu sesión y pertenencia."
+                    )
+                }
+                .collect { remotePosts ->
+                    if (!isCurrentGroupScope(uid, groupId)) return@collect
+                    groupFeedState.value = groupFeedState.value.copy(
+                        status = if (remotePosts.isEmpty()) GroupFeedStatus.EMPTY else GroupFeedStatus.READY,
+                        posts = remotePosts,
+                        message = null
+                    )
+            }
+        }
+    }
+
+    private fun isCurrentGroupScope(uid: String, groupId: String): Boolean {
+        return com.example.data.isCurrentGroupFeedScope(currentUserId.value, uid, observedGroupId, groupId)
     }
 
     private fun stopCloudObservers() {
+        cloudObserverGeneration += 1
+        cloudSessionGeneration += 1
         profileJob?.cancel()
         groupJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
         profileJob = null
         groupJob = null
         outingsJob = null
         chatJob = null
         storiesJob = null
+        groupFeedJob = null
     }
 
     // --- World Switching & Navigation ---
@@ -922,6 +995,10 @@ class MainViewModel(
 
     // --- World 1: Profile, Curiosities & Group Actions ---
     fun updateProfileInfo(newUsername: String, newBio: String, newAvatar: String) {
+        if (currentUserId.value != null && MediaStorageHelper.isLocalMediaReference(newAvatar)) {
+            authStatusMessage.value = "No se puede guardar un avatar local en una cuenta autenticada"
+            return
+        }
         val updated = userProfile.value.copy(
             username = newUsername.ifBlank { userProfile.value.username },
             bio = newBio,
@@ -929,6 +1006,34 @@ class MainViewModel(
         )
         userProfile.value = updated
         persistProfileIfAuthenticated(updated)
+    }
+
+    suspend fun updateProfileInfoAwaitable(
+        newUsername: String,
+        newBio: String,
+        newAvatar: String,
+        expectedUid: String?,
+        expectedGroupId: String
+    ): Result<Unit> {
+        val session = validateMediaWriteSession(expectedUid, expectedGroupId, newAvatar)
+        if (session.isFailure) return session
+        val updated = userProfile.value.copy(
+            username = newUsername.ifBlank { userProfile.value.username },
+            bio = newBio,
+            avatarUrl = newAvatar
+        )
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid != null) {
+            if (repo == null) return Result.failure(IllegalStateException("Repositorio Firestore no disponible"))
+            val saved = try { repo.updateUserAvatar(uid, newAvatar) } catch (e: CancellationException) { throw e }
+            if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
+            if (currentUserId.value != expectedUid || activeGroupId() != expectedGroupId) {
+                return Result.failure(IllegalStateException("La sesión o el grupo cambiaron durante el guardado"))
+            }
+        }
+        userProfile.value = updated
+        Result.success(Unit)
     }
 
     fun addCuriosity(item: String) {
@@ -959,7 +1064,6 @@ class MainViewModel(
             groupInviteCode = code,
             groupId = code
         )
-        userProfile.value = updated
 
         val uid = currentUserId.value
         val repo = socialRepository
@@ -967,15 +1071,20 @@ class MainViewModel(
             viewModelScope.launch {
                 repo.createOrEnsureGroup(code, cleanName, uid, updated.username)
                     .onSuccess {
-                        repo.saveUserProfile(updated, uid)
-                        startGroupScopedObservers(uid, code, updated)
-                        authStatusMessage.value = "Grupo '$cleanName' creado en la nube con código $code"
+                        repo.saveUserProfile(updated, uid).onSuccess {
+                            userProfile.value = updated
+                            startGroupScopedObservers(uid, code, updated)
+                            authStatusMessage.value = "Grupo '$cleanName' creado en la nube con código $code"
+                        }.onFailure { profileError ->
+                            authStatusMessage.value = "Grupo creado, pero no se pudo guardar el perfil: ${profileError.localizedMessage}"
+                        }
                     }
                     .onFailure { err ->
                         authStatusMessage.value = "Error al crear grupo en la nube: ${err.localizedMessage}"
                     }
             }
         } else {
+            userProfile.value = updated
             groupMembers.value = listOf("${updated.username} (Tú) 👑")
             authStatusMessage.value = "Grupo '$cleanName' creado con código $code (modo local)"
         }
@@ -1089,10 +1198,17 @@ class MainViewModel(
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
-            viewModelScope.launch {
-                repo.upsertOuting(finalOuting, uid).onFailure { err ->
-                    authStatusMessage.value = "No se pudo sincronizar '${finalOuting.title}': ${err.localizedMessage}"
+            if (SocialSessionPolicy.isOutingAllowedForCloudWrite(
+                    origin = socialSyncState.value.origin,
+                    outing = finalOuting
+                )) {
+                viewModelScope.launch {
+                    repo.upsertOuting(finalOuting, uid).onFailure { err ->
+                        authStatusMessage.value = "No se pudo sincronizar '${finalOuting.title}': ${err.localizedMessage}"
+                    }
                 }
+            } else {
+                authStatusMessage.value = "La salida no se sincronizó: los datos de demostración no se guardan en la nube."
             }
         }
     }
@@ -1193,10 +1309,34 @@ class MainViewModel(
         saveOrUpdateOuting(updated)
     }
 
-    fun addPhotoToOutingAlbum(outingId: String, photoUriOrPreset: String) {
-        val target = outings.value.firstOrNull { it.id == outingId } ?: outings.value.firstOrNull() ?: return
-        val updatedPhotos = (listOf(photoUriOrPreset) + target.albumPhotos).take(20)
-        saveOrUpdateOuting(target.copy(albumPhotos = updatedPhotos))
+    suspend fun addPhotoToOutingAlbum(
+        outingId: String,
+        photoUriOrPreset: String,
+        expectedUid: String? = currentUserId.value,
+        expectedGroupId: String = activeGroupId()
+    ): Result<Unit> {
+        val session = validateMediaWriteSession(expectedUid, expectedGroupId, photoUriOrPreset)
+        if (session.isFailure) return session
+        val target = outings.value.firstOrNull { it.id == outingId }
+            ?: return Result.failure(IllegalArgumentException("Salida no encontrada"))
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid != null) {
+            if (repo == null) return Result.failure(IllegalStateException("Repositorio Firestore no disponible"))
+            val saved = try { repo.addOutingAlbumPhotoTransactional(outingId, photoUriOrPreset, uid) } catch (e: CancellationException) { throw e }
+            if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
+            if (currentUserId.value != expectedUid || activeGroupId() != expectedGroupId) {
+                return Result.failure(IllegalStateException("La sesión o el grupo cambiaron durante el guardado"))
+            }
+        }
+        outings.value = outings.value.map { outing ->
+            if (outing.id == outingId) {
+                outing.copy(albumPhotos = (listOf(photoUriOrPreset) + outing.albumPhotos).distinct().take(20))
+            } else {
+                outing
+            }
+        }
+        Result.success(Unit)
     }
 
     fun deleteOuting(outingId: String) {
@@ -1207,6 +1347,87 @@ class MainViewModel(
             viewModelScope.launch {
                 repo.deleteOuting(outingId).onFailure { err ->
                     authStatusMessage.value = "Error al eliminar la salida: ${err.localizedMessage}"
+                }
+            }
+        }
+    }
+
+    // --- World 1: Private group feed ---
+    fun createGroupPost(text: String) {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        val group = activeSocialGroup.value
+        val clean = text.trim()
+        if (uid.isNullOrBlank() || repo == null || group == null || uid !in group.memberIds) {
+            groupFeedState.value = groupFeedState.value.copy(
+                status = GroupFeedStatus.ERROR,
+                message = "Inicia sesión y entra en un grupo válido para publicar."
+            )
+            return
+        }
+        if (clean.isBlank()) return
+        if (groupFeedState.value.isPublishing) return
+        val groupId = group.id
+        if (!isCurrentGroupScope(uid, groupId)) return
+        groupFeedState.value = groupFeedState.value.copy(
+            isPublishing = true,
+            actionMessage = null
+        )
+        viewModelScope.launch {
+            repo.createGroupPost(
+                GroupPost(
+                    authorId = uid,
+                    authorName = userProfile.value.username,
+                    groupId = groupId,
+                    text = clean
+                ),
+                uid
+            ).onSuccess {
+                if (isCurrentGroupScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        isPublishing = false,
+                        actionMessage = null,
+                        publishSuccessToken = groupFeedState.value.publishSuccessToken + 1,
+                        publishSuccessGroupId = groupId
+                    )
+                }
+            }.onFailure { err ->
+                if (isCurrentGroupScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        isPublishing = false,
+                        actionMessage = "No se pudo publicar: ${err.localizedMessage ?: "permiso denegado"}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteGroupPost(postId: String) {
+        val uid = currentUserId.value ?: return
+        val groupId = activeSocialGroup.value?.id ?: return
+        val post = groupFeedState.value.posts.firstOrNull { it.id == postId } ?: return
+        if (post.authorId != uid) return
+        if (post.groupId != groupId || !isCurrentGroupScope(uid, groupId)) return
+        if (postId in groupFeedState.value.deletingPostIds) return
+        val repo = socialRepository ?: return
+        groupFeedState.value = groupFeedState.value.copy(
+            deletingPostIds = groupFeedState.value.deletingPostIds + postId,
+            actionMessage = null
+        )
+        viewModelScope.launch {
+            repo.deleteGroupPost(postId, uid).onSuccess {
+                if (isCurrentGroupScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        deletingPostIds = groupFeedState.value.deletingPostIds - postId,
+                        actionMessage = null
+                    )
+                }
+            }.onFailure { err ->
+                if (isCurrentGroupScope(uid, groupId)) {
+                    groupFeedState.value = groupFeedState.value.copy(
+                        deletingPostIds = groupFeedState.value.deletingPostIds - postId,
+                        actionMessage = "No se pudo borrar la publicación: ${err.localizedMessage ?: "permiso denegado"}"
+                    )
                 }
             }
         }
@@ -1236,33 +1457,36 @@ class MainViewModel(
         }
     }
 
-    fun sendGroupVoiceMessage(
+    suspend fun sendGroupVoiceMessage(
         durationSec: Int,
         transcriptionText: String,
-        audioUrl: String = ""
-    ) {
+        audioUrl: String = "",
+        expectedUid: String? = currentUserId.value,
+        expectedGroupId: String = activeGroupId()
+    ): Result<Unit> {
+        val session = validateMediaWriteSession(expectedUid, expectedGroupId, audioUrl)
+        if (session.isFailure) return session
         val cleanDur = durationSec.coerceAtLeast(1)
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = resolveActiveWriteGroupId()
             text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
             audioDurationSec = cleanDur.toLong(),
             audioUrl = audioUrl,
             transcription = transcriptionText.trim()
         )
-        groupChatMessages.value = groupChatMessages.value + msg
         val uid = currentUserId.value
         val repo = socialRepository
-        if (uid != null && repo != null) {
-            viewModelScope.launch {
-                repo.sendChatMessage(msg, uid).onFailure { err ->
-                    authStatusMessage.value = "Error al enviar nota de voz: ${err.localizedMessage}"
-                }
-            }
+        if (uid != null) {
+            if (repo == null) return Result.failure(IllegalStateException("Repositorio Firestore no disponible"))
+            val saved = try { repo.sendChatMessage(msg, uid) } catch (e: CancellationException) { throw e }
+            if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
         }
+        groupChatMessages.value = groupChatMessages.value + msg
+        Result.success(Unit)
     }
 
     fun shareOutingToGroupChat(outing: Outing) {
@@ -1313,12 +1537,16 @@ class MainViewModel(
     }
 
     // --- World 1: Instantáneas (Stories) ---
-    fun publishInstantaneaStory(
+    suspend fun publishInstantaneaStory(
         caption: String,
         filterStyle: String,
         mediaUri: String,
-        outingTitle: String
-    ) {
+        outingTitle: String,
+        expectedUid: String? = currentUserId.value,
+        expectedGroupId: String = activeGroupId()
+    ): Result<Unit> {
+        val session = validateMediaWriteSession(expectedUid, expectedGroupId, mediaUri)
+        if (session.isFailure) return session
         val story = OutingStory(
             id = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             authorId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
@@ -1330,16 +1558,32 @@ class MainViewModel(
             outingTitle = outingTitle,
             likesCount = 1L
         )
-        stories.value = listOf(story) + stories.value
         val uid = currentUserId.value
         val repo = socialRepository
-        if (uid != null && repo != null) {
-            viewModelScope.launch {
-                repo.createStory(story, uid).onFailure { err ->
-                    authStatusMessage.value = "Error al publicar instantánea: ${err.localizedMessage}"
-                }
-            }
+        if (uid != null) {
+            if (repo == null) return Result.failure(IllegalStateException("Repositorio Firestore no disponible"))
+            val saved = try { repo.createStory(story, uid) } catch (e: CancellationException) { throw e }
+            if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
         }
+        stories.value = listOf(story) + stories.value
+        Result.success(Unit)
+    }
+
+    private fun activeGroupId(): String =
+        userProfile.value.groupId.ifBlank { userProfile.value.groupInviteCode }
+
+    private fun validateMediaWriteSession(
+        expectedUid: String?,
+        expectedGroupId: String,
+        mediaReference: String
+    ): Result<Unit> {
+        if (currentUserId.value != expectedUid || activeGroupId() != expectedGroupId) {
+            return Result.failure(IllegalStateException("La sesión o el grupo cambiaron; se canceló la publicación"))
+        }
+        if (!currentUserId.value.isNullOrBlank() && MediaStorageHelper.isLocalMediaReference(mediaReference)) {
+            return Result.failure(IllegalArgumentException("Las cuentas autenticadas requieren una URL remota de Storage"))
+        }
+        return Result.success(Unit)
     }
 
     fun likeInstantaneaStory(storyId: String) {
@@ -1815,6 +2059,7 @@ class MainViewModel(
         currentAuthDisplayName = null
         currentAuthPhotoUrl = null
         enterGuestDemoMode()
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
         authStatusMessage.value = "Sesión cerrada correctamente (modo invitado)"
     }
 

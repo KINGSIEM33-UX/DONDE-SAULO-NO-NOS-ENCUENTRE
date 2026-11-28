@@ -234,9 +234,9 @@ data class Outing(
         )
     }
 
-    fun toUpdateMap(): Map<String, Any> {
+    fun toUpdateMap(includeRsvp: Boolean = true): Map<String, Any> {
         val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, ownerId)
-        return mapOf(
+        val update = mapOf(
             "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
@@ -260,6 +260,9 @@ data class Outing(
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        return if (includeRsvp) update else update.filterKeys { key ->
+            key !in setOf("rsvpYesCount", "rsvpMaybeCount", "rsvpNoCount", "myRsvp", "rsvpByUser")
+        }
     }
 }
 

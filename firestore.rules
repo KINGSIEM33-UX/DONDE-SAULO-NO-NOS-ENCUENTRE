@@ -303,5 +303,39 @@ service cloud.firestore {
 
       allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
     }
+
+    // 5. Private chronological group feed
+    function isValidGroupPost(data) {
+      return data.keys().hasAll([
+               'authorId', 'authorName', 'groupId', 'text', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'authorId', 'authorName', 'groupId', 'text', 'createdAt', 'updatedAt'
+             ]) &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+             data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /group_posts/{postId} {
+      allow get: if isSignedIn() && isValidId(postId) && isGroupMember(existing().groupId);
+      allow list: if isSignedIn() && isGroupMember(resource.data.groupId);
+
+      allow create: if isSignedIn() &&
+                       isValidId(postId) &&
+                       isValidGroupPost(incoming()) &&
+                       isGroupMember(incoming().groupId);
+
+      allow update: if false;
+
+      allow delete: if isSignedIn() &&
+                       isValidId(postId) &&
+                       existing().authorId == request.auth.uid &&
+                       isGroupMember(existing().groupId);
+    }
   }
 }

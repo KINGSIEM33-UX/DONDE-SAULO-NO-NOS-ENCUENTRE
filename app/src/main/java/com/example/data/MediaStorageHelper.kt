@@ -11,11 +11,11 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.UUID
 
@@ -42,6 +42,27 @@ object MediaStorageHelper {
             uriOrPreset.startsWith("/")
     }
 
+    fun isRemoteMediaUrl(value: String): Boolean {
+        return value.startsWith("https://") || value.startsWith("http://")
+    }
+
+    fun isLocalMediaReference(value: String): Boolean {
+        return value.startsWith("content://") || value.startsWith("file://") || value.startsWith("/")
+    }
+
+    fun deleteOwnedLocalMedia(context: Context, value: String): Boolean {
+        if (!isLocalMediaReference(value)) return false
+        val path = when {
+            value.startsWith("file://") -> Uri.parse(value).path
+            value.startsWith("/") -> value
+            else -> null
+        } ?: return false
+        val file = File(path).canonicalFile
+        val root = mediaDir(context).canonicalFile
+        if (file.parentFile != root) return false
+        return file.delete()
+    }
+
     fun toCoilModel(uriOrPreset: String): Any {
         return if (uriOrPreset.startsWith("/")) File(uriOrPreset) else uriOrPreset
     }
@@ -61,63 +82,81 @@ object MediaStorageHelper {
     }
 
     /**
-     * Copies a transient content:// URI or temporary camera file into persistent internal storage,
-     * and optionally uploads it to Firebase Storage when authenticated and Firebase is available.
+     * Persists a picked/captured image. Authenticated users must receive a Firebase URL;
+     * guests explicitly receive a local file URI and must not publish it remotely.
      */
     suspend fun persistAndOptionallyUploadImage(
         context: Context,
         sourceUri: Uri,
         folder: String,
         uid: String?
-    ): String = withContext(Dispatchers.IO) {
+    ): Result<String> = withContext(Dispatchers.IO) {
         val localFile = File(mediaDir(context), "${folder}_${UUID.randomUUID().toString().take(12)}.jpg")
+        val tempFile = File(localFile.parentFile, ".${localFile.name}.part")
         try {
-            context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                FileOutputStream(localFile).use { output ->
+            val copied = context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                FileOutputStream(tempFile).use { output ->
                     input.copyTo(output)
+                    output.fd.sync()
                 }
+                check(tempFile.renameTo(localFile)) { "No se pudo completar la copia de la imagen" }
+                true
+            } ?: false
+            check(copied) { "No se pudo leer la imagen seleccionada" }
+            check(localFile.exists() && localFile.length() > 0L) { "La imagen seleccionada está vacía" }
+
+            if (uid.isNullOrBlank()) {
+                return@withContext Result.success(Uri.fromFile(localFile).toString())
             }
+
+            check(FirebaseApp.getApps(context).isNotEmpty()) {
+                "Firebase no está disponible para subir la imagen"
+            }
+            val storageRef = FirebaseStorage.getInstance().reference
+                .child("users/$uid/$folder/${localFile.name}")
+            storageRef.putFile(Uri.fromFile(localFile)).await()
+            val downloadUrl = storageRef.downloadUrl.await().toString()
+            check(isRemoteMediaUrl(downloadUrl)) { "Firebase Storage no devolvió una URL remota válida" }
+            localFile.delete()
+            Result.success(downloadUrl)
+        } catch (e: CancellationException) {
+            tempFile.delete()
+            if (!uid.isNullOrBlank()) localFile.delete()
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy image to internal storage", e)
-            return@withContext sourceUri.toString()
+            tempFile.delete()
+            if (!uid.isNullOrBlank()) localFile.delete()
+            Log.e(TAG, "Image persistence/upload failed", e)
+            Result.failure(e)
         }
-
-        if (!localFile.exists() || localFile.length() == 0L) {
-            return@withContext sourceUri.toString()
-        }
-
-        if (!uid.isNullOrBlank() && FirebaseApp.getApps(context).isNotEmpty()) {
-            try {
-                val storageRef = FirebaseStorage.getInstance().reference
-                    .child("users/$uid/$folder/${localFile.name}")
-                storageRef.putFile(Uri.fromFile(localFile)).await()
-                val downloadUrl = storageRef.downloadUrl.await().toString()
-                return@withContext downloadUrl
-            } catch (e: Exception) {
-                Log.w(TAG, "Firebase Storage upload skipped/failed, using local file: ${e.message}")
-            }
-        }
-
-        Uri.fromFile(localFile).toString()
     }
 
     suspend fun optionallyUploadVoiceNote(
         context: Context,
         localFile: File,
         uid: String?
-    ): String = withContext(Dispatchers.IO) {
-        if (!localFile.exists() || localFile.length() == 0L) return@withContext ""
-        if (!uid.isNullOrBlank() && FirebaseApp.getApps(context).isNotEmpty()) {
-            try {
-                val storageRef = FirebaseStorage.getInstance().reference
-                    .child("users/$uid/voice_notes/${localFile.name}")
-                storageRef.putFile(Uri.fromFile(localFile)).await()
-                return@withContext storageRef.downloadUrl.await().toString()
-            } catch (e: Exception) {
-                Log.w(TAG, "Voice upload skipped/failed, keeping local path: ${e.message}")
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            check(localFile.exists() && localFile.length() > 0L) { "El audio grabado no es válido" }
+            if (uid.isNullOrBlank()) {
+                return@withContext Result.success(localFile.absolutePath)
             }
+
+            check(FirebaseApp.getApps(context).isNotEmpty()) {
+                "Firebase no está disponible para subir el audio"
+            }
+            val storageRef = FirebaseStorage.getInstance().reference
+                .child("users/$uid/voice_notes/${localFile.name}")
+            storageRef.putFile(Uri.fromFile(localFile)).await()
+            val downloadUrl = storageRef.downloadUrl.await().toString()
+            check(isRemoteMediaUrl(downloadUrl)) { "Firebase Storage no devolvió una URL remota válida" }
+            Result.success(downloadUrl)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Voice persistence/upload failed", e)
+            Result.failure(e)
         }
-        localFile.absolutePath
     }
 
     suspend fun saveImageToGallery(context: Context, uriOrPath: String): Boolean = withContext(Dispatchers.IO) {
@@ -156,9 +195,8 @@ object MediaStorageHelper {
             val insertedUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                 ?: return@withContext false
 
-            resolver.openOutputStream(insertedUri)?.use { out ->
-                out.write(bytes)
-            } ?: return@withContext false
+            resolver.openOutputStream(insertedUri)?.use { out -> out.write(bytes) }
+                ?: return@withContext false
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 values.clear()

@@ -188,6 +188,25 @@ class SocialRepository(
         }
     }
 
+    suspend fun updateUserAvatar(userId: String = requireUserId(), avatarUrl: String): Result<Unit> = runCatching {
+        val docRef = db.collection(USERS_COLLECTION).document(userId)
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (snap.exists()) {
+                    tx.update(docRef, mapOf("avatarUrl" to avatarUrl.take(500), "updatedAt" to FieldValue.serverTimestamp()))
+                } else {
+                    throw IllegalStateException("No existe el perfil de usuario; no se puede actualizar solo el avatar")
+                }
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
     // --- 2. Outings (Salidas y Quedadas) ---
     fun observeOutings(userId: String = requireUserId()): Flow<List<Outing>> {
         return db.collection(OUTINGS_COLLECTION)
@@ -265,7 +284,9 @@ class SocialRepository(
             db.runTransaction { tx ->
                 val snap = tx.get(docRef)
                 if (snap.exists()) {
-                    tx.update(docRef, outing.toUpdateMap())
+                    // General outing edits must not overwrite RSVP data changed
+                    // concurrently by another member; RSVP has its own transaction.
+                    tx.update(docRef, outing.toUpdateMap(includeRsvp = false))
                 } else {
                     tx.set(docRef, outing.copy(id = docId).toCreateMap(userId))
                 }
@@ -284,6 +305,33 @@ class SocialRepository(
         val docRef = db.collection(OUTINGS_COLLECTION).document(outing.id)
         try {
             docRef.update(outing.toUpdateMap()).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun addOutingAlbumPhotoTransactional(
+        outingId: String,
+        photoUrl: String,
+        userId: String = requireUserId()
+    ): Result<Unit> = runCatching {
+        require(outingId.isNotBlank()) { "Outing ID must not be blank" }
+        require(photoUrl.isNotBlank()) { "Photo URL must not be blank" }
+        val docRef = db.collection(OUTINGS_COLLECTION).document(outingId)
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (!snap.exists()) {
+                    throw IllegalStateException("No existe la salida $outingId")
+                }
+                val current = snap.toObject(Outing::class.java)
+                    ?: throw IllegalStateException("La salida $outingId no tiene un formato válido")
+                val photos = (listOf(photoUrl) + current.albumPhotos).distinct().take(20)
+                tx.update(docRef, mapOf("albumPhotos" to photos.map { it.take(500) }, "updatedAt" to FieldValue.serverTimestamp()))
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -456,11 +504,59 @@ class SocialRepository(
         }
     }
 
+    // --- 5. Private group feed ---
+    fun observeGroupPosts(groupId: String): Flow<List<GroupPost>> {
+        require(groupId.isNotBlank()) { "El grupo activo es obligatorio" }
+        return db.collection(GROUP_POSTS_COLLECTION)
+            .whereEqualTo("groupId", groupId)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(
+                    GroupPost::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ).sortedWith(
+                    compareByDescending<GroupPost> { it.createdAt?.seconds ?: 0L }
+                        .thenByDescending { it.createdAt?.nanoseconds ?: 0 }
+                )
+            }
+    }
+
+    suspend fun createGroupPost(post: GroupPost, userId: String = requireUserId()): Result<String> = runCatching {
+        val docId = post.id.ifBlank { "post_${UUID.randomUUID().toString().replace("-", "").take(20)}" }
+        val docRef = db.collection(GROUP_POSTS_COLLECTION).document(docId)
+        try {
+            docRef.set(post.toCreateMap(userId)).await()
+            docId
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteGroupPost(postId: String, userId: String = requireUserId()): Result<Unit> = runCatching {
+        require(postId.isNotBlank()) { "El ID de la publicación es obligatorio" }
+        val docRef = db.collection(GROUP_POSTS_COLLECTION).document(postId)
+        try {
+            val snapshot = docRef.get().await()
+            require(snapshot.exists()) { "La publicación ya no existe" }
+            require(snapshot.getString("authorId") == userId) { "Solo el autor puede borrar la publicación" }
+            docRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
+
     companion object {
         const val GROUPS_COLLECTION = "groups"
         const val USERS_COLLECTION = "users"
         const val OUTINGS_COLLECTION = "outings"
         const val CHAT_COLLECTION = "chat_messages"
         const val STORIES_COLLECTION = "stories"
+        const val GROUP_POSTS_COLLECTION = "group_posts"
     }
 }

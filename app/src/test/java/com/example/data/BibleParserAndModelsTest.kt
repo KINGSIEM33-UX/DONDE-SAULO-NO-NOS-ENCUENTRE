@@ -1,6 +1,9 @@
 package com.example.data
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class BibleParserAndModelsTest {
@@ -28,6 +31,80 @@ class BibleParserAndModelsTest {
         assertThat(verses[0].text).contains("amó Dios")
         assertThat(verses[1].number).isEqualTo(17)
         assertThat(verses[1].text).contains("no envió Dios")
+    }
+
+    @Test
+    fun parseApiBibleHtmlToVerses_skipsEmptyNumberedVerses() {
+        val html = """
+            <span data-number="1" class="v">1</span>
+            <span data-number="2" class="v">2</span>Texto válido.
+        """.trimIndent()
+
+        val verses = BibleClient.parseApiBibleHtmlToVerses(html)
+
+        assertThat(verses).containsExactly(ParsedVerse(2, "Texto válido.")).inOrder()
+    }
+
+    @Test
+    fun validateChapterVerses_rejectsChapterWithoutText() {
+        val error = assertThrows(EmptyChapterException::class.java) {
+            BibleClient.validateChapterVerses(
+                listOf(ParsedVerse(1, " "), ParsedVerse(2, "")),
+                "API.Bible"
+            )
+        }
+
+        assertThat(error).hasMessageThat().contains("API.Bible")
+    }
+
+    @Test
+    fun fetchChapter_rejectsEmptyBollsResponse() {
+        val error = assertThrows(EmptyChapterException::class.java) {
+            runBlocking {
+                BibleClient.fetchChapter(
+                    bibleId = "RV1960",
+                    chapterId = "JHN.3",
+                    bollsBibleService = FakeBollsBibleApiService(emptyList())
+                )
+            }
+        }
+
+        assertThat(error).hasMessageThat().contains("Bolls.life")
+    }
+
+    @Test
+    fun fetchChapter_rejectsEmptyApiBibleResponse_withoutChangingProvider() {
+        val error = assertThrows(EmptyChapterException::class.java) {
+            runBlocking {
+                BibleClient.fetchChapter(
+                    bibleId = "api-bible-id",
+                    chapterId = "JHN.3",
+                    apiBibleService = FakeBibleApiService("<span data-number=\"1\">1</span>"),
+                    bollsBibleService = FakeBollsBibleApiService(
+                        listOf(BollsVerseDto(verse = 1, text = "Texto de otro proveedor"))
+                    ),
+                    useApiBible = true
+                )
+            }
+        }
+
+        assertThat(error).hasMessageThat().contains("API.Bible")
+    }
+
+    @Test
+    fun fetchChapter_doesNotSwallowCancellation() {
+        val cancellation = CancellationException("cancelled")
+        val error = assertThrows(CancellationException::class.java) {
+            runBlocking {
+                BibleClient.fetchChapter(
+                    bibleId = "RV1960",
+                    chapterId = "JHN.3",
+                    bollsBibleService = FakeBollsBibleApiService(error = cancellation)
+                )
+            }
+        }
+
+        assertThat(error).isSameInstanceAs(cancellation)
     }
 
     @Test
@@ -67,5 +144,47 @@ class BibleParserAndModelsTest {
         @Suppress("UNCHECKED_CAST")
         val memberNames = map["memberNames"] as Map<String, String>
         assertThat(memberNames["uid_1"]).isEqualTo("Carlos")
+    }
+
+    private class FakeBollsBibleApiService(
+        private val verses: List<BollsVerseDto> = emptyList(),
+        private val error: Throwable? = null
+    ) : BollsBibleApiService {
+        override suspend fun getBooks(translation: String): List<BollsBookDto> = emptyList()
+
+        override suspend fun getChapterText(
+            translation: String,
+            book: Int,
+            chapter: Int
+        ): List<BollsVerseDto> {
+            error?.let { throw it }
+            return verses
+        }
+
+        override suspend fun search(
+            translation: String,
+            query: String
+        ): List<BollsSearchHitDto> = emptyList()
+    }
+
+    private class FakeBibleApiService(
+        private val content: String
+    ) : BibleApiService {
+        override suspend fun getBibles(): BiblesResponse = BiblesResponse(emptyList())
+
+        override suspend fun getBooks(bibleId: String): BooksResponse = BooksResponse(emptyList())
+
+        override suspend fun getChapters(bibleId: String, bookId: String): ChaptersResponse =
+            ChaptersResponse(emptyList())
+
+        override suspend fun getChapterContent(
+            bibleId: String,
+            chapterId: String
+        ): ChapterContentResponse = ChapterContentResponse(
+            ChapterContentDto(chapterId, content, "Juan 3")
+        )
+
+        override suspend fun searchBible(bibleId: String, query: String): SearchResponse =
+            SearchResponse(SearchDataDto(query, 0, 0, 0, 0, emptyList()))
     }
 }

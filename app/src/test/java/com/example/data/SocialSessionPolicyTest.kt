@@ -164,6 +164,58 @@ class SocialSessionPolicyTest {
     }
 
     @Test
+    fun isOutingAllowedForCloudWrite_blocksDemoAtTheWriteBoundary() {
+        val demo = Outing(id = "outing_upcoming_confirmed", ownerId = "local_user")
+        val real = Outing(id = "outing_real_100", ownerId = "uid_real")
+
+        assertThat(SocialSessionPolicy.isOutingAllowedForCloudWrite(DataOrigin.GUEST_DEMO, real))
+            .isFalse()
+        assertThat(SocialSessionPolicy.isOutingAllowedForCloudWrite(DataOrigin.CLOUD_REAL, demo))
+            .isFalse()
+        assertThat(SocialSessionPolicy.isOutingAllowedForCloudWrite(DataOrigin.CLOUD_REAL, real))
+            .isTrue()
+    }
+
+    @Test
+    fun outingUpdateMap_canPreserveConcurrentRsvpFields() {
+        val update = Outing(
+            id = "outing_real_101",
+            ownerId = "uid_real",
+            rsvpByUser = mapOf("other" to RsvpChoice.YES.name),
+            rsvpYesCount = 4L,
+            myRsvp = RsvpChoice.MAYBE.name
+        ).toUpdateMap(includeRsvp = false)
+
+        assertThat(update).doesNotContainKey("rsvpByUser")
+        assertThat(update).doesNotContainKey("rsvpYesCount")
+        assertThat(update).doesNotContainKey("rsvpMaybeCount")
+        assertThat(update).doesNotContainKey("rsvpNoCount")
+        assertThat(update).doesNotContainKey("myRsvp")
+        assertThat(update).containsKey("title")
+    }
+
+    @Test
+    fun resolveGroupIdForWrite_usesExactPersonalUidWhenItFitsFirestoreIdLimit() {
+        assertThat(SocialSessionPolicy.resolveGroupIdForWrite("", "uid_abc123"))
+            .isEqualTo("personal_uid_abc123")
+        assertThat(SocialSessionPolicy.resolveGroupIdForWrite("", "a".repeat(119)))
+            .isEqualTo("personal_" + "a".repeat(119))
+    }
+
+    @Test
+    fun resolveGroupIdForWrite_usesStableNonTruncatingFallbackForLongOrInvalidUid() {
+        val longUid = "u".repeat(120)
+        val invalidUid = "uid:with:colon"
+        val longScope = SocialSessionPolicy.resolveGroupIdForWrite("", longUid)
+        val invalidScope = SocialSessionPolicy.resolveGroupIdForWrite("", invalidUid)
+
+        assertThat(longScope).startsWith(SocialSessionPolicy.PERSONAL_GROUP_PREFIX)
+        assertThat(longScope).hasLength(73)
+        assertThat(longScope).isEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", longUid))
+        assertThat(invalidScope).isNotEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", "uidwithcolon"))
+    }
+
+    @Test
     fun shouldShowEmptyState_neverConfusesLoadingOrErrorWithEmpty() {
         assertThat(SocialSessionPolicy.shouldShowEmptyState(CloudLoadState.Loading, 0)).isFalse()
         assertThat(SocialSessionPolicy.shouldShowEmptyState(CloudLoadState.Error("Error de red"), 0)).isFalse()

@@ -233,20 +233,32 @@ fun World1ChatScreen(viewModel: MainViewModel) {
         }
 
         val optionalCaption = inputText.trim()
-        inputText = ""
+        val expectedUid = currentUserId
+        val expectedGroupId = profile.groupId.ifBlank { profile.groupInviteCode }
         voiceStatusBanner = "Enviando nota de voz..."
         scope.launch {
-            val savedAudioUrl = MediaStorageHelper.optionallyUploadVoiceNote(
+            val uploadResult = MediaStorageHelper.optionallyUploadVoiceNote(
                 context = context,
                 localFile = recordedFile,
-                uid = currentUserId
+                uid = expectedUid
             )
-            viewModel.sendGroupVoiceMessage(
+            val savedAudioUrl = uploadResult.getOrElse { error ->
+                voiceStatusBanner = "No se pudo enviar la nota de voz: ${error.localizedMessage ?: "fallo al subir el audio"}"
+                return@launch
+            }
+            val sent = viewModel.sendGroupVoiceMessage(
                 durationSec = duration,
                 transcriptionText = optionalCaption,
-                audioUrl = savedAudioUrl
+                audioUrl = savedAudioUrl,
+                expectedUid = expectedUid,
+                expectedGroupId = expectedGroupId
             )
-            voiceStatusBanner = "Nota de voz enviada ✅"
+            sent.onSuccess {
+                inputText = ""
+                voiceStatusBanner = "Nota de voz enviada ✅"
+            }.onFailure { error ->
+                voiceStatusBanner = "No se pudo enviar la nota de voz: ${error.localizedMessage ?: "fallo al guardar"}"
+            }
         }
     }
 

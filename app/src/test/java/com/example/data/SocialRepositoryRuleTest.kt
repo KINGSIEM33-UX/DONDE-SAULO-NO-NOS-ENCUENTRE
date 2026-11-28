@@ -102,6 +102,50 @@ class SocialRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertThat(firestoreException.code).isEqualTo(FirebaseFirestoreException.Code.PERMISSION_DENIED)
     }
 
+    @Test
+    fun groupPost_memberCanCreateObserveAndDeleteOwnPost() = runBlocking {
+        val uid = signInTestUser(ALICE_EMAIL)
+        val repository = SocialRepository(firestore)
+        val group = repository.createOrEnsureGroup("FEED-ALICE", "Grupo de Alice", uid, "Alice")
+            .getOrThrow()
+        val postId = repository.createGroupPost(
+            GroupPost(authorName = "Alice", groupId = group.id, text = "Primera publicación"),
+            uid
+        ).getOrThrow()
+
+        val emitted = withTimeout(FLOW_TIMEOUT_MS) {
+            repository.observeGroupPosts(group.id).first { posts -> posts.any { it.id == postId } }
+        }
+        assertThat(emitted.single { it.id == postId }.authorId).isEqualTo(uid)
+        assertThat(repository.deleteGroupPost(postId, uid).isSuccess).isTrue()
+    }
+
+    @Test
+    fun groupPost_nonMemberCannotReadOrCreate() = runBlocking {
+        val aliceUid = signInTestUser(ALICE_EMAIL)
+        val aliceRepository = SocialRepository(firestore)
+        val group = aliceRepository.createOrEnsureGroup("FEED-PRIVATE", "Grupo privado", aliceUid, "Alice")
+            .getOrThrow()
+
+        val bobUid = signInTestUser(BOB_EMAIL)
+        val bobRepository = SocialRepository(firestore)
+        val readThrown = assertThrows(Exception::class.java) {
+            runBlocking {
+                withTimeout(FLOW_TIMEOUT_MS) { bobRepository.observeGroupPosts(group.id).first() }
+            }
+        }
+        assertThat(checkNotNull(readThrown.unwrapFirestoreException()).code)
+            .isEqualTo(FirebaseFirestoreException.Code.PERMISSION_DENIED)
+
+        val createResult = bobRepository.createGroupPost(
+            GroupPost(authorName = "Bob", groupId = group.id, text = "No debería entrar"),
+            bobUid
+        )
+        assertThat(createResult.isFailure).isTrue()
+        assertThat(createResult.exceptionOrNull()?.unwrapFirestoreException()?.code)
+            .isEqualTo(FirebaseFirestoreException.Code.PERMISSION_DENIED)
+    }
+
     private companion object {
         const val ALICE_EMAIL = "alice@quedadas.test"
         const val BOB_EMAIL = "bob@quedadas.test"

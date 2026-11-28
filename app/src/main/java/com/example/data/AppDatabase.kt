@@ -156,7 +156,7 @@ abstract class AppDatabase : RoomDatabase() {
                     title = "La Transformación de Saulo a Paul",
                     description = "Del celo extremista a la renovación de la nueva naturaleza en Colosas.",
                     category = "Devocional",
-                    passageReference = "Filipenses 3:5-6, Colosenses 3:10",
+                    passageReference = "Filipenses 3:5-7, Colosenses 3:10",
                     content = "Circuncidado al octavo día, del linaje de Israel, de la tribu de Benjamín, hebreo de hebreos; en cuanto a la ley, fariseo; en cuanto al celo, perseguidor de la iglesia; en cuanto a la justicia que se basa en la ley, intachable... pero cuantas cosas eran ganancias, las he estimado como pérdidas por amor de Cristo.",
                     details = "Fusión bíblica: «En cuanto al celo, perseguidor de la iglesia; en cuanto a la justicia que la Ley exige, intachable... Se han puesto el de la nueva naturaleza, que se va renovando...» Saulo es encontrado precisamente donde el dolor y el orgullo son derribados. Paul experimenta el despojarse del viejo perseguidor y vestirse con el amor redentor."
                 ),

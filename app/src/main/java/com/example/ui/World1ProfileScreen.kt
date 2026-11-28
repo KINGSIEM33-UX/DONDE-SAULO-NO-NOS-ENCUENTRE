@@ -138,13 +138,24 @@ fun ProfileScreen(
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val persisted = MediaStorageHelper.persistAndOptionallyUploadImage(
+                val expectedUid = viewModel.currentUserId.value
+                val expectedGroupId = profile.groupId.ifBlank { profile.groupInviteCode }
+                val result = MediaStorageHelper.persistAndOptionallyUploadImage(
                     context = context,
                     sourceUri = uri,
                     folder = "avatars",
-                    uid = viewModel.currentUserId.value
+                    uid = expectedUid
                 )
-                viewModel.updateProfileInfo(profile.username, profile.bio, persisted)
+                result.onSuccess { persisted ->
+                    viewModel.updateProfileInfoAwaitable(profile.username, profile.bio, persisted, expectedUid, expectedGroupId)
+                        .onFailure { error -> Toast.makeText(context, "No se pudo actualizar el avatar: ${error.localizedMessage ?: "fallo al guardar"}", Toast.LENGTH_LONG).show() }
+                }.onFailure { error ->
+                    Toast.makeText(
+                        context,
+                        "No se pudo actualizar el avatar: ${error.localizedMessage ?: "fallo al subir la imagen"}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }

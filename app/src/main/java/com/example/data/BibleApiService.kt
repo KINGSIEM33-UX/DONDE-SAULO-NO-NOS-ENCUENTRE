@@ -2,6 +2,7 @@ package com.example.data
 
 import com.example.BuildConfig
 import com.squareup.moshi.JsonClass
+import kotlinx.coroutines.CancellationException
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -114,6 +115,8 @@ data class ResolvedChapter(
     val reference: String,
     val verses: List<ParsedVerse>
 )
+
+class EmptyChapterException(message: String) : IllegalStateException(message)
 
 // --- Retrofit Interfaces ---
 
@@ -347,7 +350,13 @@ object BibleClient {
         }
     }
 
-    suspend fun fetchChapter(bibleId: String, chapterId: String): ResolvedChapter {
+    internal suspend fun fetchChapter(
+        bibleId: String,
+        chapterId: String,
+        apiBibleService: BibleApiService = service,
+        bollsBibleService: BollsBibleApiService = bollsService,
+        useApiBible: Boolean = hasValidApiBibleKey && !isBollsBibleId(bibleId)
+    ): ResolvedChapter {
         val parts = chapterId.split(".")
         val rawBook = parts.getOrNull(0) ?: "JHN"
         val chapterNum = parts.getOrNull(1)?.toIntOrNull()?.coerceAtLeast(1) ?: 3
@@ -356,10 +365,10 @@ object BibleClient {
         val totalChapters = bookNumberToChaptersCount[bookNum] ?: chapterNum
         val bookName = bookNumberToSpanishName[bookNum] ?: rawBook
 
-        if (hasValidApiBibleKey && !isBollsBibleId(bibleId)) {
+        if (useApiBible && !isBollsBibleId(bibleId)) {
             try {
-                val res = service.getChapterContent(bibleId, chapterId).data
-                val parsed = parseApiBibleHtmlToVerses(res.content)
+                val res = apiBibleService.getChapterContent(bibleId, chapterId).data
+                val parsed = validateChapterVerses(parseApiBibleHtmlToVerses(res.content), "API.Bible")
                 return ResolvedChapter(
                     bibleId = bibleId,
                     bookId = usfm,
@@ -369,18 +378,22 @@ object BibleClient {
                     reference = res.reference ?: "$bookName $chapterNum",
                     verses = parsed
                 )
+            } catch (e: EmptyChapterException) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
             }
         }
 
         val translation = toBollsTranslation(bibleId)
-        val rawVerses = bollsService.getChapterText(translation, bookNum, chapterNum)
-        val verses = rawVerses.map { v ->
+        val rawVerses = bollsBibleService.getChapterText(translation, bookNum, chapterNum)
+        val verses = validateChapterVerses(rawVerses.map { v ->
             ParsedVerse(
                 number = v.verse,
                 text = cleanHtmlTags(v.text)
             )
-        }
+        }, "Bolls.life")
         return ResolvedChapter(
             bibleId = translation,
             bookId = usfm,
@@ -455,5 +468,13 @@ object BibleClient {
         }
         val plain = cleanHtmlTags(html)
         return if (plain.isNotBlank()) listOf(ParsedVerse(1, plain)) else emptyList()
+    }
+
+    fun validateChapterVerses(verses: List<ParsedVerse>, source: String): List<ParsedVerse> {
+        val nonEmptyVerses = verses.filter { it.text.isNotBlank() }
+        if (nonEmptyVerses.isEmpty()) {
+            throw EmptyChapterException("$source no devolvió texto para un capítulo")
+        }
+        return nonEmptyVerses
     }
 }
