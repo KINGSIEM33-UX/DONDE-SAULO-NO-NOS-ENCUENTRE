@@ -308,12 +308,39 @@ class SocialRepository(
     }
 
     suspend fun leaveGroup(groupId: String, userId: String = requireUserId()): Result<Unit> = runCatching {
+        require(groupId.isNotBlank()) { "El grupo no es válido" }
         val memberRef = db.collection(GROUPS_COLLECTION)
             .document(groupId)
             .collection(MEMBERS_SUBCOLLECTION)
             .document(userId)
+        val groupRef = db.collection(GROUPS_COLLECTION).document(groupId)
         try {
-            memberRef.delete().await()
+            db.runTransaction { tx ->
+                val groupSnapshot = tx.get(groupRef)
+                check(groupSnapshot.exists()) { "GROUP_NOT_FOUND" }
+                val group = groupSnapshot.toObject(SocialGroup::class.java)
+                    ?: error("GROUP_NOT_FOUND")
+                val memberSnapshot = tx.get(memberRef)
+                val member = memberSnapshot.toObject(GroupMember::class.java)
+                val isLegacyMember = group.memberIds.contains(userId)
+                val isOwner = group.createdBy == userId || member?.groupRole == GroupRole.OWNER
+                check(!isOwner) { "OWNER_CANNOT_LEAVE" }
+                check(isLegacyMember || memberSnapshot.exists()) { "NOT_A_GROUP_MEMBER" }
+
+                if (memberSnapshot.exists()) {
+                    tx.delete(memberRef)
+                }
+                if (isLegacyMember) {
+                    tx.update(
+                        groupRef,
+                        mapOf(
+                            "memberIds" to group.memberIds.filterNot { it == userId },
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                null
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

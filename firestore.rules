@@ -162,7 +162,7 @@ service cloud.firestore {
                        getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.role == 'OWNER';
 
       // Closed self-join door: nobody can self-join or add third parties via /groups/{groupId} update.
-      // Only OWNER/ADMIN can rename; only OWNER can prune legacy memberIds (strict subset, never adding UIDs).
+      // OWNER/ADMIN can rename; OWNER can prune other legacy members and each legacy member can revoke itself.
       allow update: if isSignedIn() &&
                        isValidId(groupId) &&
                        incoming().createdBy == existing().createdBy &&
@@ -180,8 +180,19 @@ service cloud.firestore {
                              (isGroupAdminOrOwner(groupId) &&
                               incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])) ||
                              (isGroupOwner(groupId) &&
+                              request.auth.uid in incoming().memberIds &&
                               existing().memberIds.hasAll(incoming().memberIds) &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt']))
+                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt'])) ||
+                             // A legacy member may remove only their own UID. The v2 document,
+                             // when present, must be removed by the same atomic write.
+                             (isSignedIn() &&
+                              existing().createdBy != request.auth.uid &&
+                              request.auth.uid in existing().memberIds &&
+                              existing().memberIds.hasAll(incoming().memberIds) &&
+                              incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                              !(request.auth.uid in incoming().memberIds) &&
+                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']) &&
+                              !existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)))
                            )
                          )
                        );

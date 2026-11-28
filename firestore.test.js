@@ -541,3 +541,72 @@ test("Legacy group (QUEDA-2026): preserves existing members & outings, closes se
   await assertSucceeds(carolDb.collection("outings").doc("legacy_outing_1").get());
   await assertSucceeds(carolDb.collection("outings").where("groupId", "==", "QUEDA-2026").get());
 });
+
+test("Legacy self-leave removes only the caller from memberIds and its v2 doc atomically", async () => {
+  const groupId = "LEGACY-LEAVE-1";
+  const now = new Date();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("groups").doc(groupId).set({
+      name: "Grupo Legacy Salida",
+      inviteCode: groupId,
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID, BOB_UID, CAROL_UID],
+      memberNames: { [ALICE_UID]: "Alice", [BOB_UID]: "Bob", [CAROL_UID]: "Carol" },
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection("groups").doc(groupId).collection("members").doc(BOB_UID).set({
+      userId: BOB_UID,
+      groupId,
+      displayName: "Bob",
+      role: "MEMBER",
+      inviteToken: "",
+      joinedAt: now,
+      updatedAt: now,
+    });
+  });
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const carolDb = testEnv.authenticatedContext(CAROL_UID).firestore();
+
+  // Bob cannot remove Carol or add Eve while he is still a legacy member.
+  await assertFails(bobDb.collection("groups").doc(groupId).update({
+    memberIds: [ALICE_UID, BOB_UID],
+    updatedAt: new Date(),
+  }));
+
+  // Bob's transaction removes Bob's v2 document and only Bob's legacy UID.
+  await assertSucceeds(bobDb.runTransaction(async (tx) => {
+    const groupRef = bobDb.collection("groups").doc(groupId);
+    const memberRef = groupRef.collection("members").doc(BOB_UID);
+    await tx.get(groupRef);
+    await tx.get(memberRef);
+    tx.delete(memberRef);
+    tx.update(groupRef, { memberIds: [ALICE_UID, CAROL_UID], updatedAt: new Date() });
+  }));
+  const afterBob = await assertSucceeds(aliceDb.collection("groups").doc(groupId).get());
+  assert.deepEqual(afterBob.data().memberIds, [ALICE_UID, CAROL_UID]);
+  assert.equal(
+    (await assertSucceeds(aliceDb.collection("groups").doc(groupId).collection("members").doc(BOB_UID).get())).exists,
+    false
+  );
+  await assertFails(bobDb.collection("groups").doc(groupId).get());
+
+  // A legacy member without a v2 document can still remove only itself.
+  await assertSucceeds(carolDb.collection("groups").doc(groupId).update({
+    memberIds: [ALICE_UID],
+    updatedAt: new Date(),
+  }));
+  await assertFails(carolDb.collection("groups").doc(groupId).get());
+
+  // Neither an added UID nor OWNER removal is allowed.
+  await assertFails(aliceDb.collection("groups").doc(groupId).update({
+    memberIds: [ALICE_UID, EVE_UID],
+    updatedAt: new Date(),
+  }));
+  await assertFails(aliceDb.collection("groups").doc(groupId).update({
+    memberIds: [],
+    updatedAt: new Date(),
+  }));
+});

@@ -7,11 +7,18 @@ import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.ServerTimestamp
-import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val INVITE_TOKEN_IN_PATH = Regex("(group_invites/)(INV-[A-Z0-9_-]{20,60})")
+
+internal fun redactFirestorePath(path: String?): String? =
+    path?.replace(INVITE_TOKEN_IN_PATH, "$1[REDACTED]")
+
+internal fun redactFirestoreText(text: String): String =
+    text.replace(Regex("INV-[A-Z0-9_-]{20,60}"), "INV-[REDACTED]")
 
 enum class OperationType(val value: String) {
     CREATE("create"),
@@ -31,25 +38,15 @@ fun handleFirestoreError(exception: Exception, operationType: OperationType, pat
         null
     }
 
-    val providerInfoList = currentUser?.providerData?.map { provider ->
-        JSONObject().apply {
-            put("providerId", provider.providerId)
-            put("email", provider.email)
-        }
-    } ?: emptyList()
-
     val authInfoJson = JSONObject().apply {
         put("userId", currentUser?.uid)
-        put("email", currentUser?.email)
         put("emailVerified", currentUser?.isEmailVerified)
-        put("tenantId", currentUser?.tenantId)
-        put("providerInfo", JSONArray(providerInfoList))
     }
 
     val errorInfoJson = JSONObject().apply {
-        put("error", exception.message ?: exception.toString())
+        put("error", redactFirestoreText(exception.message ?: exception.toString()))
         put("operationType", operationType.value)
-        put("path", path)
+        put("path", redactFirestorePath(path))
         put("authInfo", authInfoJson)
     }
 
