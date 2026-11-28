@@ -1,0 +1,9 @@
+{
+  "name": "adora-firestore-rules-ci",
+  "private": true,
+  "description": "Pinned dependencies for Firestore emulator rules tests in GitHub Actions",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "3.0.4",
+    "firebase-tools": "13.35.1"
+  }
+}
