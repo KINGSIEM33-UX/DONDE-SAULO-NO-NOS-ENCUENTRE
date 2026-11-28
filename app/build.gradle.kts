@@ -149,10 +149,12 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 tasks.withType<Test> {
-    failFast = true
-    timeout.set(Duration.ofMinutes(2))
+    // Robolectric downloads Android runtime jars separately from Gradle dependencies.
+    // Use Maven Central's canonical host; repo1 can reject requests from CI runners.
+    systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+    failFast = false
+    timeout.set(Duration.ofMinutes(6))
     testLogging {
         events("passed", "failed", "skipped")
     }
 }
-
