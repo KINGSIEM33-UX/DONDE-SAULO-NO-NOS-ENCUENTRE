@@ -7,6 +7,10 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,6 +51,31 @@ class AppDatabaseMigrationTest {
             assertLegacyRowsPreserved(db)
             assertEquals(8, db.version)
             assertEquals(1, count(db, "study_events"))
+            database.close()
+        } finally {
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun concurrentFavoriteInsertsAreSerializedAndLegacyDuplicatesRemain() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "favorite-concurrency-${System.nanoTime()}.db"
+        try {
+            createFixture(context, name, 7)
+            seedLegacyRows(context, name, 7)
+            val database = openRoomDatabase(context, name)
+            val db = database.openHelper.writableDatabase
+            db.execSQL("INSERT INTO favorite_verses(sectionId, bibleId, verseReference, verseText, timestamp) VALUES ('JHN.3', NULL, 'Juan 3:16', 'segundo legado', 3)")
+            val dao = database.favoriteVerseDao()
+            (1..20).map {
+                async(Dispatchers.IO) {
+                    dao.insertFavoriteVerseIfAbsent(FavoriteVerse(sectionId = "ROM.8", bibleId = "RVR1960", verseReference = "Romanos 8:1", verseText = "texto"))
+                }
+            }.awaitAll()
+            dao.insertFavoriteVerseIfAbsent(FavoriteVerse(sectionId = "ROM.8", bibleId = "NVI", verseReference = "Romanos 8:1", verseText = "otra traducción"))
+            assertEquals(2, db.query("SELECT COUNT(*) FROM favorite_verses WHERE sectionId = 'JHN.3'").use { it.moveToFirst(); it.getInt(0) })
+            assertEquals(2, db.query("SELECT COUNT(*) FROM favorite_verses WHERE sectionId = 'ROM.8'").use { it.moveToFirst(); it.getInt(0) })
             database.close()
         } finally {
             context.deleteDatabase(name)
