@@ -5,7 +5,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 class OutingSelectionTest {
     private val format = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
@@ -46,6 +49,26 @@ class OutingSelectionTest {
         )
 
         assertNull(selected)
+    }
+
+    @Test
+    fun usesCurrentDefaultTimeZoneWhenReevaluatingOutings() {
+        val originalTimeZone = TimeZone.getDefault()
+        try {
+            val now = Date.from(Instant.parse("2026-11-28T18:30:00Z"))
+            val localOuting = listOf(outing("local", "2026-11-28", "19:00"))
+
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+            val upcomingInUtc = nextUpcomingOuting(localOuting, now)
+
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"))
+            val pastInTokyo = nextUpcomingOuting(localOuting, now)
+
+            assertEquals("local", upcomingInUtc?.id)
+            assertNull(pastInTokyo)
+        } finally {
+            TimeZone.setDefault(originalTimeZone)
+        }
     }
 
     private fun outing(id: String, dateIso: String, time: String, status: String = "CONFIRMED") = Outing(

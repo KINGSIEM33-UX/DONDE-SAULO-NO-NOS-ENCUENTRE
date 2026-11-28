@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -59,6 +60,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,6 +82,7 @@ import com.example.ui.theme.StatusConfirmedGreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Date
 
 private enum class PendingAudioAction {
     NONE,
@@ -101,7 +104,14 @@ fun World1ChatScreen(viewModel: MainViewModel) {
     val syncState by viewModel.socialSyncState.collectAsState()
     val chatLoadState = syncState.chatState
     val hasActiveGroup = profile.groupId.isNotBlank() || profile.groupInviteCode.isNotBlank()
-    val nextOuting = remember(outings) { nextUpcomingOuting(outings) }
+    var clockMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            clockMillis = System.currentTimeMillis()
+        }
+    }
+    val nextOuting = remember(outings, clockMillis) { nextUpcomingOuting(outings, Date(clockMillis)) }
 
     var inputText by remember { mutableStateOf("") }
     var isRecordingAudio by remember { mutableStateOf(false) }
@@ -450,7 +460,14 @@ fun World1ChatScreen(viewModel: MainViewModel) {
 
                 nextOuting?.let { nextOuting ->
                     IconButton(
-                        onClick = { viewModel.shareOutingToGroupChat(nextOuting) },
+                        onClick = {
+                            val currentNext = nextUpcomingOuting(outings)
+                            if (currentNext == null) {
+                                Toast.makeText(context, "No hay próximas salidas", Toast.LENGTH_SHORT).show()
+                            } else {
+                                viewModel.shareOutingToGroupChat(currentNext)
+                            }
+                        },
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
