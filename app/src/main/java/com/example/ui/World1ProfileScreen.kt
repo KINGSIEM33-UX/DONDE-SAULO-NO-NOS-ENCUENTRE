@@ -979,7 +979,7 @@ fun ProfileScreen(
                     )
                     OutlinedTextField(
                         value = tokenInput,
-                        onValueChange = { tokenInput = it },
+                        onValueChange = { tokenInput = GroupInviteCrypto.normalizeInviteToken(it) },
                         label = { Text("Token de invitación (INV-…)") },
                         maxLines = 3,
                         isError = isLegacyTyped,

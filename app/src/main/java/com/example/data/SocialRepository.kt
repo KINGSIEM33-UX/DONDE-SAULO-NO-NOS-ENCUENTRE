@@ -309,6 +309,8 @@ class SocialRepository(
 
     suspend fun leaveGroup(groupId: String, userId: String = requireUserId()): Result<Unit> = runCatching {
         require(groupId.isNotBlank()) { "El grupo no es válido" }
+        val authenticatedUserId = requireUserId()
+        require(userId == authenticatedUserId) { "Solo puedes salir con tu propio usuario" }
         val memberRef = db.collection(GROUPS_COLLECTION)
             .document(groupId)
             .collection(MEMBERS_SUBCOLLECTION)

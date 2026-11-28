@@ -162,7 +162,11 @@ service cloud.firestore {
                        getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.role == 'OWNER';
 
       // Closed self-join door: nobody can self-join or add third parties via /groups/{groupId} update.
-      // OWNER/ADMIN can rename; OWNER can prune other legacy members and each legacy member can revoke itself.
+      // OWNER/ADMIN can rename. Legacy self-leave is allowed only when the caller is
+      // removed from memberIds exactly once and its v2 document is removed in the
+      // same atomic write. Arbitrary third-party legacy pruning is intentionally
+      // unsupported from the client because rules cannot safely correlate duplicate
+      // array entries with a specific member document.
       allow update: if isSignedIn() &&
                        isValidId(groupId) &&
                        incoming().createdBy == existing().createdBy &&
@@ -179,12 +183,9 @@ service cloud.firestore {
                            (
                              (isGroupAdminOrOwner(groupId) &&
                               incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])) ||
-                             (isGroupOwner(groupId) &&
-                              request.auth.uid in incoming().memberIds &&
-                              existing().memberIds.hasAll(incoming().memberIds) &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt'])) ||
                              // A legacy member may remove only their own UID. The v2 document,
-                             // when present, must be removed by the same atomic write.
+                             // when present, must be removed by the same atomic write. The
+                             // exact one-item size delta rejects ambiguous duplicate cleanup.
                              (isSignedIn() &&
                               existing().createdBy != request.auth.uid &&
                               request.auth.uid in existing().memberIds &&
@@ -282,11 +283,17 @@ service cloud.firestore {
                          isValidId(memberUid) &&
                          existing().role != 'OWNER' &&
                          (
-                           // Self leave (non-owner)
-                           memberUid == request.auth.uid ||
-                           // Owner can remove ADMIN or MEMBER; ADMIN can remove MEMBER only
-                           isGroupOwner(groupId) ||
-                           (isGroupAdminOrOwner(groupId) && existing().role == 'MEMBER')
+                           // Self leave (non-owner). A legacy fallback must be closed
+                           // in the same atomic write; an isolated doc delete is denied.
+                           (memberUid == request.auth.uid &&
+                            (!isLegacyGroupMember(groupId, memberUid) ||
+                             !existsAfter(/databases/$(database)/documents/groups/$(groupId)) ||
+                             !(memberUid in getAfter(/databases/$(database)/documents/groups/$(groupId)).data.memberIds))) ||
+                           // Third-party removal is safe only for v2-only membership.
+                           // Legacy members require a privileged/backend-safe operation.
+                           (!isLegacyGroupMember(groupId, memberUid) &&
+                            (isGroupOwner(groupId) ||
+                             (isGroupAdminOrOwner(groupId) && existing().role == 'MEMBER')))
                          );
       }
     }

@@ -610,3 +610,107 @@ test("Legacy self-leave removes only the caller from memberIds and its v2 doc at
     updatedAt: new Date(),
   }));
 });
+
+
+test("Legacy revocation requires atomic closure of both access paths", async () => {
+  const groupId = "LEGACY-ATOMIC-1";
+  const now = new Date();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("groups").doc(groupId).set({
+      name: "Legacy Atomic",
+      inviteCode: groupId,
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID, BOB_UID, CAROL_UID],
+      memberNames: { [ALICE_UID]: "Alice", [BOB_UID]: "Bob", [CAROL_UID]: "Carol" },
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection("groups").doc(groupId).collection("members").doc(BOB_UID).set({
+      userId: BOB_UID,
+      groupId,
+      displayName: "Bob",
+      role: "MEMBER",
+      inviteToken: "",
+      joinedAt: now,
+      updatedAt: now,
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const carolDb = testEnv.authenticatedContext(CAROL_UID).firestore();
+
+  // Neither half of a legacy revocation is sufficient on its own.
+  await assertFails(
+    bobDb.collection("groups").doc(groupId).collection("members").doc(BOB_UID).delete()
+  );
+  await assertFails(
+    bobDb.collection("groups").doc(groupId).update({
+      memberIds: [ALICE_UID, CAROL_UID],
+      updatedAt: new Date(),
+    })
+  );
+
+  // A third party cannot remove a legacy member by deleting only v2.
+  await assertFails(
+    aliceDb.collection("groups").doc(groupId).collection("members").doc(BOB_UID).delete()
+  );
+  await assertFails(
+    aliceDb.collection("groups").doc(groupId).update({
+      memberIds: [ALICE_UID, CAROL_UID],
+      updatedAt: new Date(),
+    })
+  );
+
+  // The member can close both paths in one transaction.
+  await assertSucceeds(bobDb.runTransaction(async (tx) => {
+    const groupRef = bobDb.collection("groups").doc(groupId);
+    const memberRef = groupRef.collection("members").doc(BOB_UID);
+    await tx.get(groupRef);
+    await tx.get(memberRef);
+    tx.delete(memberRef);
+    tx.update(groupRef, { memberIds: [ALICE_UID, CAROL_UID], updatedAt: new Date() });
+  }));
+  await assertFails(bobDb.collection("groups").doc(groupId).get());
+
+  // OWNER remains intact and an owner-only deletion attempt cannot remove it.
+  await assertSucceeds(aliceDb.collection("groups").doc(groupId).get());
+  await assertFails(
+    aliceDb.collection("groups").doc(groupId).collection("members").doc(ALICE_UID).delete()
+  );
+
+  // A legacy member without a v2 document can leave through the group update path.
+  await assertSucceeds(carolDb.collection("groups").doc(groupId).update({
+    memberIds: [ALICE_UID],
+    updatedAt: new Date(),
+  }));
+  await assertFails(carolDb.collection("groups").doc(groupId).get());
+});
+
+test("Duplicate legacy UID cleanup is denied rather than deleting innocent members", async () => {
+  const groupId = "LEGACY-DUPLICATE-1";
+  const now = new Date();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("groups").doc(groupId).set({
+      name: "Legacy Duplicate",
+      inviteCode: groupId,
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID, BOB_UID, BOB_UID, CAROL_UID],
+      memberNames: { [ALICE_UID]: "Alice", [BOB_UID]: "Bob", [CAROL_UID]: "Carol" },
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  // Removing both duplicate entries has an ambiguous delta; rules reject it.
+  await assertFails(bobDb.collection("groups").doc(groupId).update({
+    memberIds: [ALICE_UID, CAROL_UID],
+    updatedAt: new Date(),
+  }));
+  const snapshot = await assertSucceeds(
+    bobDb.collection("groups").doc(groupId).get()
+  );
+  assert.deepEqual(snapshot.data().memberIds, [ALICE_UID, BOB_UID, BOB_UID, CAROL_UID]);
+});

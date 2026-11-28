@@ -1239,7 +1239,7 @@ class MainViewModel(
             viewModelScope.launch {
                 when (
                     val outcome = repo.redeemInviteAndJoinGroupAtomic(
-                        rawTokenInput = inviteCodeInput,
+                        rawTokenInput = normalized,
                         userId = uid,
                         displayName = userProfile.value.username
                     )
