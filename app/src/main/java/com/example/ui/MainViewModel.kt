@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.BibleSection
+import com.example.data.BibleClient
 import com.example.data.CloudLoadState
 import com.example.data.DataOrigin
 import com.example.data.FavoriteVerse
@@ -1778,7 +1779,7 @@ class MainViewModel(
             repository.insertRecentChapter(
                 RecentChapter(
                     chapterId = chapterId,
-                    bibleId = bibleId,
+                    bibleId = BibleClient.canonicalBibleId(bibleId),
                     reference = reference
                 )
             )
@@ -1792,7 +1793,7 @@ class MainViewModel(
             repository.insertFavoriteVerse(
                 FavoriteVerse(
                     sectionId = sectionId,
-                    bibleId = bibleId,
+                    bibleId = bibleId?.let(BibleClient::canonicalBibleId),
                     verseReference = reference,
                     verseText = text
                 )
@@ -1914,7 +1915,8 @@ class MainViewModel(
         }
     }
 
-    fun getNotesForChapter(chapterId: String, bibleId: String) = repository.getVerseNotesForSection(chapterId, bibleId)
+    fun getNotesForChapter(chapterId: String, bibleId: String) = repository.getVerseNotesForSection(chapterId, BibleClient.canonicalBibleId(bibleId))
+    fun getLegacyNotesForChapter(chapterId: String) = repository.getLegacyVerseNotesForSection(chapterId)
 
     fun deleteVerseNote(id: Int) {
         viewModelScope.launch {

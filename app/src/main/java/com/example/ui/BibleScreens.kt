@@ -310,7 +310,7 @@ fun BibleReaderScreen(
     val availableVersions = remember { BibleClient.availableSpanishBibles() }
 
     var currentBibleId by remember(bibleId, preferredVersion) {
-        mutableStateOf(bibleId ?: BibleClient.toBollsTranslation(preferredVersion))
+        mutableStateOf(BibleClient.canonicalBibleId(bibleId ?: BibleClient.toBollsTranslation(preferredVersion)))
     }
     var targetChapterId by remember(chapterId) {
         mutableStateOf(chapterId ?: "JHN.3")
@@ -330,6 +330,7 @@ fun BibleReaderScreen(
     var searchError by remember { mutableStateOf<String?>(null) }
 
     val chapterNotes by viewModel.getNotesForChapter(targetChapterId, currentBibleId).collectAsStateWithLifecycle(initialValue = emptyList())
+    val legacyChapterNotes by viewModel.getLegacyNotesForChapter(targetChapterId).collectAsStateWithLifecycle(initialValue = emptyList())
     val rawChapterExplanation by viewModel.rawChapterExplanation.collectAsStateWithLifecycle()
     val isGeneratingRawExplanation by viewModel.isGeneratingRawExplanation.collectAsStateWithLifecycle()
 
@@ -683,7 +684,7 @@ fun BibleReaderScreen(
                                 HorizontalDivider()
                                 Spacer(Modifier.height(10.dp))
                                 Text(
-                                    text = "Mis Notas del Capítulo (${chapterNotes.size})",
+                                    text = "Mis Notas del Capítulo (${chapterNotes.size + legacyChapterNotes.size})",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
@@ -701,6 +702,26 @@ fun BibleReaderScreen(
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(note.verseReference, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                            Text(note.noteText, style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        IconButton(onClick = { viewModel.deleteVerseNote(note.id) }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Eliminar nota", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                            items(legacyChapterNotes, key = { "legacy-${it.id}" }) { note ->
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Traducción no determinada · ${note.verseReference}", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.tertiary)
                                             Text(note.noteText, style = MaterialTheme.typography.bodyMedium)
                                         }
                                         IconButton(onClick = { viewModel.deleteVerseNote(note.id) }) {

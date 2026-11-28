@@ -245,6 +245,15 @@ object BibleClient {
         BibleDto("DHH", "Dios Habla Hoy", "DHH", "Lenguaje sencillo y directo", LanguageDto("spa", "Español"))
     )
 
+    /** Returns the app's stable ID for known aliases; unknown API.Bible IDs are preserved. */
+    fun canonicalBibleId(bibleId: String): String {
+        val known = availableSpanishBibles().firstOrNull {
+            it.id.equals(bibleId, ignoreCase = true) ||
+                it.abbreviation?.equals(bibleId, ignoreCase = true) == true
+        }
+        return known?.id ?: bibleId
+    }
+
     // Standard USFM 3-letter book ID <-> Bolls.life 1..66 book number
     private val usfmToBookNumber = mapOf(
         "GEN" to 1, "EXO" to 2, "LEV" to 3, "NUM" to 4, "DEU" to 5,

@@ -12,6 +12,9 @@ interface FavoriteVerseDao {
     @Query("SELECT * FROM favorite_verses ORDER BY timestamp DESC")
     fun getAllFavoriteVerses(): Flow<List<FavoriteVerse>>
 
+    @Query("SELECT * FROM favorite_verses WHERE sectionId = :sectionId AND verseReference = :verseReference AND (bibleId = :bibleId OR (bibleId IS NULL AND :bibleId IS NULL)) LIMIT 1")
+    suspend fun findByIdentity(sectionId: String, bibleId: String?, verseReference: String): FavoriteVerse?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFavoriteVerse(favoriteVerse: FavoriteVerse)
 

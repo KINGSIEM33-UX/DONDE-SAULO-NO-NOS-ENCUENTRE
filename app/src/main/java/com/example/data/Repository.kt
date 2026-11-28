@@ -43,7 +43,9 @@ class Repository(
     }
 
     suspend fun insertFavoriteVerse(favoriteVerse: FavoriteVerse) {
-        favoriteVerseDao.insertFavoriteVerse(favoriteVerse)
+        if (favoriteVerseDao.findByIdentity(favoriteVerse.sectionId, favoriteVerse.bibleId, favoriteVerse.verseReference) == null) {
+            favoriteVerseDao.insertFavoriteVerse(favoriteVerse)
+        }
     }
 
     suspend fun deleteFavoriteVerse(id: Int) {

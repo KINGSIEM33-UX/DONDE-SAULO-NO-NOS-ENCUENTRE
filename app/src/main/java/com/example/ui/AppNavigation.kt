@@ -799,7 +799,7 @@ fun LibraryScreen(
             val readSectionsCount = allSections.count { it.isRead }
             val totalSectionsCount = allSections.size.coerceAtLeast(1)
             val studyPercent = ((readSectionsCount * 100f) / totalSectionsCount).coerceIn(0f, 100f)
-            val recentUniqueChapters = recentChapters.distinctBy { it.chapterId }.size
+            val recentUniqueChapters = recentChapters.distinctBy { it.chapterId to it.bibleId }.size
             val lastRecent = recentChapters.firstOrNull()
 
             // Spiritual Journey Progress Tracker (Real Room Stats)
