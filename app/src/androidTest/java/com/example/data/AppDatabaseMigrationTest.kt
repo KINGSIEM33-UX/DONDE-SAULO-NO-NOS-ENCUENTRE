@@ -143,25 +143,15 @@ class AppDatabaseMigrationTest {
                 timestamp INTEGER NOT NULL
             )
         """.trimIndent())
-        if (version == 6) {
-            db.execSQL("""
-                CREATE TABLE recent_chapters (
-                    chapterId TEXT NOT NULL PRIMARY KEY,
-                    bibleId TEXT NOT NULL,
-                    reference TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL
-                )
-            """.trimIndent())
-        } else {
-            db.execSQL("""
-                CREATE TABLE recent_chapters (
-                    chapterId TEXT NOT NULL,
-                    bibleId TEXT NOT NULL,
-                    reference TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    PRIMARY KEY(chapterId, bibleId)
-                )
-            """.trimIndent())
+        db.execSQL("""
+            CREATE TABLE recent_chapters (
+                chapterId TEXT NOT NULL PRIMARY KEY,
+                bibleId TEXT NOT NULL,
+                reference TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            )
+        """.trimIndent())
+        if (version >= 7) {
             db.execSQL("""
                 CREATE TABLE study_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
