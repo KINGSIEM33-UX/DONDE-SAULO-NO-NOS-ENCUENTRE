@@ -467,6 +467,86 @@ test("Two concurrent joins racing on a single-use invite: EXACTLY ONE succeeds, 
   assert.equal(inviteSnap.data().useCount, 1);
 });
 
+test("ALTO-4: group delete is denied and stale members/invites cannot cross a same-ID recreation", async () => {
+  const oldAliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const newOwnerDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const freshBobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const staleToken = "INV-S7A8L9E0-G1R2E3S4-T5T6S7S8-M9E0N1T2";
+  const oldCreatedAt = new Date(Date.now() - 120_000);
+
+  // Model a complete, already-orphaned old subtree without deleting application data.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).collection("members").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      groupId: HIGH_ENTROPY_GROUP_ID,
+      displayName: "Alice antigua",
+      role: "OWNER",
+      inviteToken: "",
+      joinedAt: oldCreatedAt,
+      updatedAt: oldCreatedAt,
+    });
+    await db.collection("group_invites").doc(staleToken).set({
+      token: staleToken,
+      groupId: HIGH_ENTROPY_GROUP_ID,
+      groupNamePreview: "Grupo antiguo",
+      createdBy: ALICE_UID,
+      revoked: false,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      maxUses: 3,
+      useCount: 0,
+      lastRedeemedBy: "",
+      createdAt: oldCreatedAt,
+      updatedAt: oldCreatedAt,
+    });
+    await db.collection("outings").doc("stale_group_outing").set(
+      validOutingPayload(ALICE_UID, HIGH_ENTROPY_GROUP_ID, oldCreatedAt)
+    );
+  });
+
+  // Recreating the same ID with a fresh creation timestamp is a normal route for the new owner.
+  await assertSucceeds(createV2GroupAtomically(newOwnerDb, HIGH_ENTROPY_GROUP_ID, EVE_UID, "Eve", "Grupo nuevo"));
+
+  // The old OWNER is not a member/owner of the new generation, despite the parent existing.
+  await assertFails(oldAliceDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).get());
+  await assertFails(oldAliceDb.collection("outings").doc("stale_group_outing").get());
+  await assertFails(
+    oldAliceDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).collection("members").doc(ALICE_UID).get()
+  );
+  await assertFails(oldAliceDb.collection("group_invites").doc(staleToken).get());
+  await assertFails(
+    oldAliceDb.collection("group_invites").doc(staleToken).update({ revoked: true, updatedAt: new Date() })
+  );
+  await assertFails(
+    oldAliceDb.collection("group_invites").doc("INV-N1E2W3-4T5R6E7S8-T9T0-OLD-STALE-TOKEN").set({
+      token: "INV-N1E2W3-4T5R6E7S8-T9T0-OLD-STALE-TOKEN",
+      groupId: HIGH_ENTROPY_GROUP_ID,
+      groupNamePreview: "Intento antiguo",
+      createdBy: ALICE_UID,
+      revoked: false,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      maxUses: 1,
+      useCount: 0,
+      lastRedeemedBy: "",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  );
+
+  // Client deletion is fail-closed, so no new orphan set can be created through Rules.
+  await assertFails(newOwnerDb.collection("groups").doc(HIGH_ENTROPY_GROUP_ID).delete());
+
+  // Positive normal path remains available for a fresh invite in the recreated group.
+  const freshToken = "INV-F9R8E7S6-H5G4R3O2-U1P0N9E8-W7X6Y5Z4";
+  await assertSucceeds(createInviteDoc(newOwnerDb, {
+    token: freshToken,
+    groupId: HIGH_ENTROPY_GROUP_ID,
+    creatorUid: EVE_UID,
+    maxUses: 1,
+  }));
+  await assertSucceeds(redeemInviteTransactionally(freshBobDb, freshToken, BOB_UID, "Bob nuevo"));
+});
+
 test("Legacy group (QUEDA-2026): preserves existing members & outings, closes self-join door, supports reversible backfill & v2 invites", async () => {
   const now = new Date();
   // Seed legacy v1 group & outing as they already exist in production

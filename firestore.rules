@@ -41,7 +41,12 @@ service cloud.firestore {
     // --- Group Membership & Role Helpers (v2 Subcollection + Legacy v1 Read Fallback) ---
     function hasV2MemberDoc(groupId, uid) {
       return isValidId(groupId) &&
-             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid));
+             exists(/databases/$(database)/documents/groups/$(groupId)) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.groupId == groupId &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt is timestamp &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt >=
+               get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt;
     }
 
     function v2MemberRole(groupId, uid) {
@@ -186,7 +191,10 @@ service cloud.firestore {
                          )
                        );
 
-      allow delete: if isGroupOwner(groupId);
+      // Client deletion is deliberately fail-closed: Firestore Rules cannot enumerate and
+      // atomically tombstone every member/invite descendant. A privileged migration may
+      // delete a complete subtree, but this client surface must never create orphans.
+      allow delete: if false;
 
       // Per-member subcollection: eliminates concurrent join races & arbitrary member tampering
       match /members/{memberUid} {
@@ -196,7 +204,9 @@ service cloud.firestore {
         allow get: if isSignedIn() &&
                       isValidId(groupId) &&
                       isValidId(memberUid) &&
-                      (memberUid == request.auth.uid || isGroupMember(groupId));
+                      ((memberUid == request.auth.uid &&
+                        !exists(/databases/$(database)/documents/groups/$(groupId)/members/$(memberUid))) ||
+                       isGroupMember(groupId));
         allow list: if isGroupMember(groupId);
 
         allow create: if isSignedIn() &&
@@ -210,6 +220,7 @@ service cloud.firestore {
                              !exists(/databases/$(database)/documents/groups/$(groupId)) &&
                              existsAfter(/databases/$(database)/documents/groups/$(groupId)) &&
                              getAfter(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid &&
+                             getAfter(/databases/$(database)/documents/groups/$(groupId)).data.createdAt <= incoming().joinedAt &&
                              incoming().role == 'OWNER' &&
                              incoming().inviteToken == ''
                            ) ||
@@ -219,6 +230,8 @@ service cloud.firestore {
                              incoming().role == 'MEMBER' &&
                              isValidInviteTokenId(incoming().inviteToken) &&
                              exists(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)) &&
+                             get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.createdAt >=
+                               get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.groupId == groupId &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.revoked == false &&
                              get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.expiresAt > request.time &&
@@ -286,10 +299,13 @@ service cloud.firestore {
       allow get: if isSignedIn() &&
                     isValidInviteTokenId(token) &&
                     resource != null &&
-                    (
-                      isGroupAdminOrOwner(resource.data.groupId) ||
                       (
-                        resource.data.revoked == false &&
+                        isGroupAdminOrOwner(resource.data.groupId) ||
+                        (
+                          exists(/databases/$(database)/documents/groups/$(resource.data.groupId)) &&
+                          resource.data.createdAt >=
+                            get(/databases/$(database)/documents/groups/$(resource.data.groupId)).data.createdAt &&
+                          resource.data.revoked == false &&
                         resource.data.expiresAt > request.time &&
                         resource.data.useCount < resource.data.maxUses
                       )
@@ -301,6 +317,9 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidGroupInvite(incoming(), token) &&
                        isGroupAdminOrOwner(incoming().groupId) &&
+                       exists(/databases/$(database)/documents/groups/$(incoming().groupId)) &&
+                       incoming().createdAt >=
+                         get(/databases/$(database)/documents/groups/$(incoming().groupId)).data.createdAt &&
                        incoming().createdBy == request.auth.uid &&
                        incoming().revoked == false &&
                        incoming().useCount == 0 &&
@@ -328,6 +347,9 @@ service cloud.firestore {
                          // Case 2: Atomic redemption coupled with creating /groups/{groupId}/members/{uid}
                          (
                            existing().revoked == false &&
+                           exists(/databases/$(database)/documents/groups/$(existing().groupId)) &&
+                           existing().createdAt >=
+                             get(/databases/$(database)/documents/groups/$(existing().groupId)).data.createdAt &&
                            incoming().revoked == false &&
                            existing().expiresAt > request.time &&
                            existing().useCount < existing().maxUses &&

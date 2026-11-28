@@ -30,6 +30,14 @@
 
 ## 3. Límites demostrables SIN backend privilegiado (transparencia total)
 
+### 3.0 Ciclo de vida ALTO-4: cierre fail-closed sin borrado descendente
+
+Las reglas no permiten borrar `/groups/{groupId}` desde el cliente. Esta decisión es deliberadamente fail-closed: Firestore Rules no puede enumerar y tombstonear de forma atómica todos los documentos descendientes (`members/*`, invitaciones y contenido). Permitir el borrado del padre dejaría restos con autoridad; exigir únicamente que el padre exista tampoco protege contra borrar y recrear el mismo `groupId`.
+
+Para defenderse también de una recreación administrada del mismo ID, una membresía v2 solo es vigente cuando el padre existe, el `groupId` coincide y `member.joinedAt >= group.createdAt`; una invitación v2 solo es vigente cuando `invite.createdAt >= group.createdAt`. Los restos anteriores a la nueva generación pierden lectura y autoridad aunque el ID del padre vuelva a existir. La ruta normal de creación/redención permanece compatible con los payloads actuales y los grupos legacy conservan su fallback `memberIds`.
+
+Si en el futuro se necesita eliminar grupos, debe hacerse mediante una migración privilegiada que enumere y respalde primero todo el árbol, elimine miembros/invitaciones/contenido y solo después elimine el padre; no debe reutilizarse el ID hasta completar esa operación. Esta rama no borra datos ni implementa ese backend.
+
 No se ha activado facturación ni Cloud Functions. Sin un backend privilegiado (Admin SDK / Cloud Function), **Firestore Rules + transacciones de cliente NO pueden garantizar estas 4 propiedades**:
 
 1. **Sin hashing criptográfico de tokens en servidor:** Firestore Rules CEL carece de `sha256()`. El ID del documento en `/group_invites/{token}` es el propio token en texto plano (mitigado por **160 bits de entropía** y `allow list` bloqueado a no-admins, pero un administrador con acceso directo a la consola de Firestore vería el token en claro).
