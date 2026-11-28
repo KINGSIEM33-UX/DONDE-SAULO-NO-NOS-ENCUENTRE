@@ -1,0 +1,72 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAllowedFolder(folder) {
+      return folder in ['album', 'stories', 'voice_notes'];
+    }
+
+    function isImage() {
+      return request.resource.size < 10 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    function isAudio() {
+      return request.resource.size < 10 * 1024 * 1024 &&
+             request.resource.contentType.matches('audio/(mp4|mpeg|aac|ogg|wav|x-m4a|3gpp)');
+    }
+
+    function isValidUpload(folder) {
+      return isAllowedFolder(folder) &&
+             ((folder == 'voice_notes' && isAudio()) ||
+              (folder != 'voice_notes' && isImage()));
+    }
+
+    // Storage Rules can only read the default Firestore database. This helper
+    // is intentionally used only by the future group-scoped layout; see the
+    // migration document before enabling it against a named production DB.
+    function isDefaultDatabaseGroupMember(groupId) {
+      return signedIn() &&
+             firestore.exists(/databases/(default)/documents/groups/$(groupId)) &&
+             request.auth.uid in firestore.get(
+               /databases/(default)/documents/groups/$(groupId)
+             ).data.memberIds;
+    }
+
+    // Current Android clients upload here and persist getDownloadUrl() values.
+    // There is no groupId in this path, so rules cannot authorize group members
+    // without guessing from unrelated user/profile data. Keep reads owner-only
+    // rather than widening access; existing bearer URLs remain independently
+    // usable by anyone holding the URL until their token is revoked/rotated.
+    match /users/{userId}/{folder}/{fileName} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUpload(folder);
+      allow delete: if isOwner(userId);
+    }
+
+    // Migration target: callers must include the group in the object path.
+    // Membership lookup is deliberately default-database-only because that is
+    // the only Firestore database Storage Rules support.
+    match /groups/{groupId}/media/{userId}/{folder}/{fileName} {
+      allow read: if isDefaultDatabaseGroupMember(groupId);
+      allow create, update: if isDefaultDatabaseGroupMember(groupId) &&
+                            userId == request.auth.uid &&
+                            isValidUpload(folder);
+      allow delete: if isDefaultDatabaseGroupMember(groupId) &&
+                    userId == request.auth.uid;
+    }
+
+    // Defense in depth: no other object path is accessible.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

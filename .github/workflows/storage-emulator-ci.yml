@@ -1,0 +1,47 @@
+name: Storage rules (emulator)
+
+on:
+  push:
+    branches: [main, 'cue/**']
+    paths:
+      - 'storage.rules'
+      - 'storage.test.js'
+      - 'firestore.rules'
+      - 'firebase.ci.json'
+      - 'package.json'
+      - '.github/workflows/storage-emulator-ci.yml'
+  pull_request:
+    paths:
+      - 'storage.rules'
+      - 'storage.test.js'
+      - 'firestore.rules'
+      - 'firebase.ci.json'
+      - 'package.json'
+      - '.github/workflows/storage-emulator-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  storage-rules:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_PROJECT: demo-adora-storage-ci
+      GCP_PROJECT: demo-adora-storage-ci
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8085
+      STORAGE_EMULATOR_HOST: 127.0.0.1:9199
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+      - name: Install pinned test and emulator CLI dependencies
+        run: npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund
+      - name: Run Storage rules tests in the emulators
+        run: >-
+          npx --no-install firebase emulators:exec --config firebase.ci.json
+          --project "$FIREBASE_PROJECT" --only auth,firestore,storage
+          "node --test storage.test.js"
