@@ -33,8 +33,9 @@ abstract class FirestoreEmulatorTestBase {
     @Before
     open fun setUpFirebase() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val resId = context.resources.getIdentifier("firestore_database_id", "string", context.packageName)
-        databaseId = if (resId != 0) context.getString(resId) else "demo-database"
+        // CI loads firestore.rules into the emulator's default demo database.
+        // A named database would otherwise be created with open rules by the emulator.
+        databaseId = "(default)"
 
         val app = if (FirebaseApp.getApps(context).isEmpty()) {
             val newApp = FirebaseApp.initializeApp(

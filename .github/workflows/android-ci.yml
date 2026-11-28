@@ -29,12 +29,25 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Set up Node.js for Firebase emulators
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+
+      - name: Install Firebase emulator tooling
+        run: npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund
+
       - name: Install Android SDK 36.1
         run: >-
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36.1" "build-tools;36.0.0"
 
-      - name: Set up Gradle and dependency caching
+      - name: Set up Gradle without persistent cache
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
 
-      - name: Assemble debug app and run unit tests
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest
+      - name: Assemble and test against isolated Firebase emulators
+        run: >-
+          npx --no-install firebase emulators:exec --config firebase.ci.json
+          --project demo-no-project --only auth,firestore
+          './gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest'
