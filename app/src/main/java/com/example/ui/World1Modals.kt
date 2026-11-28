@@ -125,8 +125,8 @@ fun CameraAndStoriesModal(
     var activeStoryIndex by remember { mutableIntStateOf(-1) }
     var showCreateStorySheet by remember { mutableStateOf(false) }
     var selectedOutingId by remember(outings) { mutableStateOf(outings.firstOrNull()?.id ?: "") }
-    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
-    var cameraTargetIsStory by remember { mutableStateOf(false) }
+    var pendingCameraUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var cameraTargetIsStory by rememberSaveable { mutableStateOf(false) }
     var draftStoryPhotoUri by rememberSaveable { mutableStateOf("") }
     var draftStoryExpectedUid by rememberSaveable { mutableStateOf<String?>(null) }
     var draftStoryExpectedGroupId by rememberSaveable { mutableStateOf("") }
