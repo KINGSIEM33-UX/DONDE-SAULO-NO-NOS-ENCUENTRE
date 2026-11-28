@@ -72,10 +72,39 @@ service cloud.firestore {
     // timestamp is not older than the current group. This is a lifecycle boundary, not a
     // trusted creation clock: Rules cannot prove when a client generated a timestamp.
     function isCurrentGroupContent(data) {
-      return data.groupId is string &&
+      return ('groupId' in data) &&
+             ('createdAt' in data) &&
+             data.groupId is string &&
              exists(/databases/$(database)/documents/groups/$(data.groupId)) &&
              data.createdAt is timestamp &&
              data.createdAt >= get(/databases/$(database)/documents/groups/$(data.groupId)).data.createdAt;
+    }
+
+    // Direct ownership remains available for personal content and for a user's own
+    // historical group document, but is not transferable to a new generation merely
+    // because ownerId matches a current member UID. The historical member record is
+    // the explicit legacy ownership anchor; do not remove this check when pruning data.
+    function isHistoricalGroupOwner(groupId, uid) {
+      return isSignedIn() &&
+             isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)) &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.userId == uid &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.groupId == groupId &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt is timestamp &&
+             get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.joinedAt <
+               get(/databases/$(database)/documents/groups/$(groupId)).data.createdAt;
+    }
+
+    function isOwnedOuting(data) {
+      return ('ownerId' in data) &&
+             ('groupId' in data) &&
+             data.ownerId == request.auth.uid &&
+             (
+               !exists(/databases/$(database)/documents/groups/$(data.groupId)) ||
+               isCurrentGroupContent(data) ||
+               isHistoricalGroupOwner(data.groupId, request.auth.uid)
+             );
     }
 
     function isGroupOwner(groupId) {
@@ -468,11 +497,14 @@ service cloud.firestore {
 
     match /outings/{outingId} {
       allow get: if isSignedIn() && isValidId(outingId) &&
-                    (existing().ownerId == request.auth.uid ||
+                    (isOwnedOuting(existing()) ||
                      (isCurrentGroupContent(existing()) && isGroupMember(existing().groupId)));
+      // Query rules cannot prove a dynamic createdAt >= parent.createdAt comparison
+      // for every candidate in a groupId-only list. The client adds that boundary;
+      // direct get remains generation-fenced to prevent privileged-ID reuse access.
       allow list: if isSignedIn() &&
-                     (resource.data.ownerId == request.auth.uid ||
-                      (isCurrentGroupContent(resource.data) && isGroupMember(resource.data.groupId)));
+                     (('ownerId' in resource.data && resource.data.ownerId == request.auth.uid) ||
+                      (('groupId' in resource.data) && isGroupMember(resource.data.groupId)));
 
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&

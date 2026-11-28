@@ -9,6 +9,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -389,14 +391,18 @@ class SocialRepository(
     }
 
     fun observeGroupOutings(groupId: String): Flow<List<Outing>> {
-        return db.collection(OUTINGS_COLLECTION)
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { querySnapshot ->
-                querySnapshot.toObjects(
-                    Outing::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ).sortedBy { it.dateIso + " " + it.time }
+        return observeGroup(groupId).flatMapLatest { group ->
+            val generationStart = group?.createdAt ?: return@flatMapLatest emptyFlow()
+            db.collection(OUTINGS_COLLECTION)
+                .whereEqualTo("groupId", groupId)
+                .whereGreaterThanOrEqualTo("createdAt", generationStart)
+                .snapshots()
+                .map { querySnapshot ->
+                    querySnapshot.toObjects(
+                        Outing::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).sortedBy { it.dateIso + " " + it.time }
+                }
             }
     }
 
