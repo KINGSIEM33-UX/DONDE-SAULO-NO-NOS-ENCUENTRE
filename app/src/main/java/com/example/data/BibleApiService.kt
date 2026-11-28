@@ -382,7 +382,10 @@ object BibleClient {
                 throw e
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Never present a different translation as the requested API.Bible text.
+                // The Bolls fallback is only valid for the known keyless translations.
+                throw e
             }
         }
 

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.IOException
 
 class BibleParserAndModelsTest {
 
@@ -92,6 +93,28 @@ class BibleParserAndModelsTest {
     }
 
     @Test
+    fun fetchChapter_doesNotShowBollsTextWhenApiBibleFails() {
+        val error = assertThrows(IOException::class.java) {
+            runBlocking {
+                BibleClient.fetchChapter(
+                    bibleId = "api-bible-id",
+                    chapterId = "JHN.3",
+                    apiBibleService = FakeBibleApiService(
+                        content = "",
+                        error = IOException("API.Bible unavailable")
+                    ),
+                    bollsBibleService = FakeBollsBibleApiService(
+                        listOf(BollsVerseDto(verse = 1, text = "Texto de RV1960 que no corresponde"))
+                    ),
+                    useApiBible = true
+                )
+            }
+        }
+
+        assertThat(error).hasMessageThat().isEqualTo("API.Bible unavailable")
+    }
+
+    @Test
     fun fetchChapter_doesNotSwallowCancellation() {
         val cancellation = CancellationException("cancelled")
         val error = assertThrows(CancellationException::class.java) {
@@ -168,7 +191,8 @@ class BibleParserAndModelsTest {
     }
 
     private class FakeBibleApiService(
-        private val content: String
+        private val content: String,
+        private val error: Throwable? = null
     ) : BibleApiService {
         override suspend fun getBibles(): BiblesResponse = BiblesResponse(emptyList())
 
@@ -180,9 +204,12 @@ class BibleParserAndModelsTest {
         override suspend fun getChapterContent(
             bibleId: String,
             chapterId: String
-        ): ChapterContentResponse = ChapterContentResponse(
-            ChapterContentDto(chapterId, content, "Juan 3")
-        )
+        ): ChapterContentResponse {
+            error?.let { throw it }
+            return ChapterContentResponse(
+                ChapterContentDto(chapterId, content, "Juan 3")
+            )
+        }
 
         override suspend fun searchBible(bibleId: String, query: String): SearchResponse =
             SearchResponse(SearchDataDto(query, 0, 0, 0, 0, emptyList()))
