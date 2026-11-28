@@ -8,7 +8,8 @@ const fs = require("node:fs");
 
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-adora-storage-ci";
 const FIRESTORE_PORT = Number((process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":")[1]);
-const STORAGE_PORT = Number((process.env.STORAGE_EMULATOR_HOST || "127.0.0.1:9199").split(":")[1]);
+const storageAddress = process.env.STORAGE_EMULATOR_HOST || "127.0.0.1:9199";
+const STORAGE_PORT = Number(new URL(storageAddress.includes("://") ? storageAddress : `http://${storageAddress}`).port);
 const ALICE_UID = "alice_123";
 const BOB_UID = "bob_456";
 let testEnv;
