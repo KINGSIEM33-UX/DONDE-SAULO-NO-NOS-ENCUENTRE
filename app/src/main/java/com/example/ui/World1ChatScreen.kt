@@ -862,12 +862,13 @@ private fun ChatBubbleItem(
         }
 
         // Reaction pills & quick react row
+        val displayedReactions = message.effectiveReactions()
         Row(
             modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            message.reactions.forEach { emoji ->
+            displayedReactions.forEach { emoji ->
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -880,7 +881,7 @@ private fun ChatBubbleItem(
                     )
                 }
             }
-            quickEmojis.filterNot { message.reactions.contains(it) }.take(2).forEach { emoji ->
+            quickEmojis.filterNot { displayedReactions.contains(it) }.take(2).forEach { emoji ->
                 Text(
                     text = emoji,
                     fontSize = 12.sp,

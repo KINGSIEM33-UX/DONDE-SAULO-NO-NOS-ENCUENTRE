@@ -26,6 +26,7 @@ import com.example.data.OutingStory
 import com.example.data.RecentChapter
 import com.example.data.Repository
 import com.example.data.RsvpChoice
+import com.example.data.SocialContentAuthzPolicy
 import com.example.data.SocialGroup
 import com.example.data.SocialRepository
 import com.example.data.SocialSessionPolicy
@@ -1369,22 +1370,66 @@ class MainViewModel(
         }
     }
 
+    private fun canWriteInScope(targetGroupId: String): Boolean {
+        return SocialContentAuthzPolicy.canWriteToGroupScope(
+            targetGroupId = targetGroupId,
+            currentUserId = currentUserId.value,
+            activeGroupId = observedGroupId,
+            isCurrentGroupMember = currentGroupRole.value != null,
+            isGuestDemo = socialSyncState.value.isGuestDemo
+        )
+    }
+
     // --- World 1: Outing CRUD, Calendar & Map Actions ---
     fun saveOrUpdateOuting(outing: Outing) {
         val existingList = outings.value.toMutableList()
         val existingIdx = existingList.indexOfFirst { it.id == outing.id && outing.id.isNotBlank() }
         val activeGroupId = resolveActiveWriteGroupId()
-        val finalOuting = if (outing.id.isBlank()) {
-            outing.copy(
-                id = "outing_${UUID.randomUUID().toString().replace("-", "").take(12)}",
-                ownerId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
-                groupId = activeGroupId
-            )
-        } else {
-            outing.copy(groupId = outing.groupId.ifBlank { activeGroupId })
-        }
+        val uid = currentUserId.value
+        val isGuestDemo = socialSyncState.value.isGuestDemo
 
         val isNew = existingIdx < 0
+        val finalOuting = if (isNew) {
+            if (!canWriteInScope(activeGroupId)) {
+                authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+                return
+            }
+            val ownerUid = uid ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
+            val initialChoice = RsvpChoice.fromString(outing.myRsvp)
+            val initialMap = if (initialChoice == RsvpChoice.NONE) emptyMap() else mapOf(ownerUid to initialChoice.name)
+            outing.copy(
+                id = outing.id.ifBlank { "outing_${UUID.randomUUID().toString().replace("-", "").take(12)}" },
+                ownerId = ownerUid,
+                groupId = activeGroupId,
+                myRsvp = initialChoice.name,
+                rsvpByUser = initialMap,
+                rsvpYesCount = if (initialChoice == RsvpChoice.YES) 1L else 0L,
+                rsvpMaybeCount = if (initialChoice == RsvpChoice.MAYBE) 1L else 0L,
+                rsvpNoCount = if (initialChoice == RsvpChoice.NO) 1L else 0L
+            )
+        } else {
+            val existing = existingList[existingIdx]
+            if (!SocialContentAuthzPolicy.canEditOrCancelOuting(existing, uid, isGuestDemo)) {
+                authStatusMessage.value = SocialContentAuthzPolicy.OWNER_ONLY_OUTING_ERROR
+                return
+            }
+            if (!canWriteInScope(existing.groupId)) {
+                authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+                return
+            }
+            // Strictly preserve immutable ownerId/groupId and never overwrite RSVPs/counters during editorial edits.
+            outing.copy(
+                id = existing.id,
+                ownerId = existing.ownerId,
+                groupId = existing.groupId,
+                rsvpByUser = existing.rsvpByUser,
+                rsvpYesCount = existing.rsvpYesCount,
+                rsvpMaybeCount = existing.rsvpMaybeCount,
+                rsvpNoCount = existing.rsvpNoCount,
+                myRsvp = existing.myRsvp
+            )
+        }
+
         if (existingIdx >= 0) {
             existingList[existingIdx] = finalOuting
         } else {
@@ -1401,11 +1446,15 @@ class MainViewModel(
             )
         }
 
-        val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.upsertOuting(finalOuting, uid).onFailure { err ->
+                val result = if (isNew) {
+                    repo.createOuting(finalOuting, uid).map { Unit }
+                } else {
+                    repo.updateOuting(finalOuting)
+                }
+                result.onFailure { err ->
                     authStatusMessage.value = "No se pudo sincronizar '${finalOuting.title}': ${err.localizedMessage}"
                 }
             }
@@ -1419,25 +1468,32 @@ class MainViewModel(
 
     fun updateOutingRsvp(outingId: String, choice: RsvpChoice) {
         val target = outings.value.firstOrNull { it.id == outingId } ?: return
-        val uid = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
+        val authUid = currentUserId.value
+        val uid = authUid ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
+        val isGuestDemo = socialSyncState.value.isGuestDemo
 
-        val updatedMap = target.rsvpByUser.toMutableMap()
-        if (choice == RsvpChoice.NONE) {
-            updatedMap.remove(uid)
-        } else {
-            updatedMap[uid] = choice.name
+        if (!isGuestDemo && !canWriteInScope(target.groupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
         }
 
-        val updated: Outing = if (target.rsvpByUser.isNotEmpty() || currentUserId.value != null) {
-            val yes = updatedMap.values.count { it == RsvpChoice.YES.name }.toLong()
-            val maybe = updatedMap.values.count { it == RsvpChoice.MAYBE.name }.toLong()
-            val no = updatedMap.values.count { it == RsvpChoice.NO.name }.toLong()
+        val updated: Outing = if (authUid != null || target.rsvpByUser.isNotEmpty()) {
+            val plan = SocialContentAuthzPolicy.computeSelfRsvpTransition(
+                existingByUser = target.rsvpByUser,
+                existingYes = target.rsvpYesCount,
+                existingMaybe = target.rsvpMaybeCount,
+                existingNo = target.rsvpNoCount,
+                userId = uid,
+                newChoice = choice
+            )
+            if (plan.isNoOp) return
             target.copy(
-                myRsvp = choice.name,
-                rsvpByUser = updatedMap,
-                rsvpYesCount = yes,
-                rsvpMaybeCount = maybe,
-                rsvpNoCount = no
+                // Do not overwrite shared myRsvp on authenticated multi-user docs; UI reads rsvpByUser[uid].
+                myRsvp = if (authUid == null) choice.name else target.myRsvp,
+                rsvpByUser = plan.nextRsvpByUser,
+                rsvpYesCount = plan.nextYesCount,
+                rsvpMaybeCount = plan.nextMaybeCount,
+                rsvpNoCount = plan.nextNoCount
             )
         } else {
             val prevChoice = target.rsvpChoice
@@ -1453,6 +1509,8 @@ class MainViewModel(
                 RsvpChoice.NO -> no++
                 RsvpChoice.NONE -> {}
             }
+            val updatedMap = target.rsvpByUser.toMutableMap()
+            if (choice == RsvpChoice.NONE) updatedMap.remove(uid) else updatedMap[uid] = choice.name
             target.copy(
                 myRsvp = choice.name,
                 rsvpByUser = updatedMap,
@@ -1473,7 +1531,6 @@ class MainViewModel(
         }
         playFeedbackSound(false)
 
-        val authUid = currentUserId.value
         val repo = socialRepository
         if (authUid != null && repo != null) {
             viewModelScope.launch {
@@ -1515,8 +1572,17 @@ class MainViewModel(
     }
 
     fun deleteOuting(outingId: String) {
-        outings.value = outings.value.filterNot { it.id == outingId }
+        val target = outings.value.firstOrNull { it.id == outingId } ?: return
         val uid = currentUserId.value
+        if (!SocialContentAuthzPolicy.canDeleteOuting(target, uid, socialSyncState.value.isGuestDemo)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.OWNER_ONLY_OUTING_ERROR
+            return
+        }
+        if (!canWriteInScope(target.groupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
+        outings.value = outings.value.filterNot { it.id == outingId }
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
@@ -1531,11 +1597,16 @@ class MainViewModel(
     fun sendGroupTextMessage(text: String) {
         val clean = text.trim()
         if (clean.isBlank()) return
+        val targetGroupId = resolveActiveWriteGroupId()
+        if (!canWriteInScope(targetGroupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = targetGroupId,
             text = clean,
             messageType = "TEXT"
         )
@@ -1556,12 +1627,17 @@ class MainViewModel(
         transcriptionText: String,
         audioUrl: String = ""
     ) {
+        val targetGroupId = resolveActiveWriteGroupId()
+        if (!canWriteInScope(targetGroupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
         val cleanDur = durationSec.coerceAtLeast(1)
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = targetGroupId,
             text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
             audioDurationSec = cleanDur.toLong(),
@@ -1581,11 +1657,16 @@ class MainViewModel(
     }
 
     fun shareOutingToGroupChat(outing: Outing) {
+        val targetGroupId = resolveActiveWriteGroupId()
+        if (!canWriteInScope(targetGroupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
         val msg = GroupChatMessage(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = targetGroupId,
             text = "He compartido la salida '${outing.title}'. ¿Quién se apunta?",
             messageType = "OUTING_SHARE",
             sharedOutingId = outing.id,
@@ -1608,19 +1689,25 @@ class MainViewModel(
         val idx = currentList.indexOfFirst { it.id == messageId }
         if (idx == -1) return
         val msg = currentList[idx]
-        val newReactions = if (msg.reactions.contains(emoji)) {
-            msg.reactions - emoji
-        } else {
-            (msg.reactions + emoji).take(10)
+        val authUid = currentUserId.value
+        val uid = authUid ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
+        if (authUid != null && !canWriteInScope(msg.groupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
         }
-        currentList[idx] = msg.copy(reactions = newReactions)
+
+        val plan = SocialContentAuthzPolicy.computeSelfChatReactionTransition(
+            existingReactionsByUser = msg.reactionsByUser,
+            userId = uid,
+            emoji = emoji
+        )
+        currentList[idx] = msg.copy(reactionsByUser = plan.nextReactionsByUser)
         groupChatMessages.value = currentList
 
-        val uid = currentUserId.value
         val repo = socialRepository
-        if (uid != null && repo != null) {
+        if (authUid != null && repo != null) {
             viewModelScope.launch {
-                repo.updateMessageReactions(messageId, newReactions).onFailure { err ->
+                repo.toggleMessageReactionTransactional(messageId, authUid, emoji).onFailure { err ->
                     authStatusMessage.value = "Error al actualizar reacción: ${err.localizedMessage}"
                 }
             }
@@ -1634,16 +1721,22 @@ class MainViewModel(
         mediaUri: String,
         outingTitle: String
     ) {
+        val targetGroupId = resolveActiveWriteGroupId()
+        if (!canWriteInScope(targetGroupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
         val story = OutingStory(
             id = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             authorId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             authorName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId(),
+            groupId = targetGroupId,
             caption = caption.ifBlank { "Recuerdo compartido con el grupo" },
             filterStyle = filterStyle,
             mediaUri = mediaUri,
             outingTitle = outingTitle,
-            likesCount = 1L
+            likesCount = 0L,
+            likedByUser = emptyMap()
         )
         stories.value = listOf(story) + stories.value
         val uid = currentUserId.value
@@ -1662,16 +1755,29 @@ class MainViewModel(
         val idx = current.indexOfFirst { it.id == storyId }
         if (idx == -1) return
         val target = current[idx]
-        val newCount = target.likesCount + 1L
-        current[idx] = target.copy(likesCount = newCount)
+        val authUid = currentUserId.value
+        val uid = authUid ?: SocialSessionPolicy.GUEST_DEMO_USER_ID
+        if (authUid != null && target.groupId.isNotBlank() && !canWriteInScope(target.groupId)) {
+            authStatusMessage.value = SocialContentAuthzPolicy.NON_MEMBER_WRITE_ERROR
+            return
+        }
+
+        val plan = SocialContentAuthzPolicy.computeSelfStoryLikeTransition(
+            existingLikedByUser = target.likedByUser,
+            existingLikesCount = target.likesCount,
+            userId = uid
+        )
+        current[idx] = target.copy(
+            likesCount = plan.nextLikesCount,
+            likedByUser = plan.nextLikedByUser
+        )
         stories.value = current
 
-        val uid = currentUserId.value
         val repo = socialRepository
-        if (uid != null && repo != null) {
+        if (authUid != null && repo != null) {
             viewModelScope.launch {
-                repo.likeStory(storyId, newCount).onFailure { err ->
-                    authStatusMessage.value = "Error al dar me gusta: ${err.localizedMessage}"
+                repo.toggleStoryLikeTransactional(storyId, authUid).onFailure { err ->
+                    authStatusMessage.value = "Error al actualizar me gusta: ${err.localizedMessage}"
                 }
             }
         }

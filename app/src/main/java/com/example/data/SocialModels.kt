@@ -348,10 +348,15 @@ data class Outing(
     }
 
     fun toCreateMap(uid: String): Map<String, Any> {
-        val normalizedMap = if (rsvpByUser.isEmpty() && RsvpChoice.fromString(myRsvp) != RsvpChoice.NONE) {
-            mapOf(uid to RsvpChoice.fromString(myRsvp).name)
+        val initialChoice = if (rsvpByUser.containsKey(uid)) {
+            RsvpChoice.fromString(rsvpByUser[uid])
         } else {
-            rsvpByUser
+            RsvpChoice.fromString(myRsvp)
+        }
+        val initialMap = if (initialChoice == RsvpChoice.NONE) {
+            emptyMap()
+        } else {
+            mapOf(uid to initialChoice.name)
         }
         val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
         return mapOf(
@@ -371,21 +376,23 @@ data class Outing(
             "destLng" to destLng,
             "meetLat" to meetLat,
             "meetLng" to meetLng,
-            "rsvpYesCount" to rsvpYesCount.coerceAtLeast(0L),
-            "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
-            "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
-            "myRsvp" to RsvpChoice.fromString(myRsvp).name,
-            "rsvpByUser" to normalizedMap,
+            "rsvpYesCount" to if (initialChoice == RsvpChoice.YES) 1L else 0L,
+            "rsvpMaybeCount" to if (initialChoice == RsvpChoice.MAYBE) 1L else 0L,
+            "rsvpNoCount" to if (initialChoice == RsvpChoice.NO) 1L else 0L,
+            "myRsvp" to initialChoice.name,
+            "rsvpByUser" to initialMap,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
     }
 
+    /**
+     * Owner-only editorial update map. Intentionally omits immutable fields (ownerId, groupId, createdAt)
+     * and RSVP/counter fields so editorial edits can never move groups or falsify RSVPs/counters.
+     */
     fun toUpdateMap(): Map<String, Any> {
-        val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, ownerId)
         return mapOf(
-            "groupId" to effectiveGroupId,
             "title" to title.take(120).ifBlank { "Salida en grupo" },
             "location" to location.take(200).ifBlank { "Centro" },
             "meetingPoint" to meetingPoint.take(200),
@@ -400,11 +407,6 @@ data class Outing(
             "destLng" to destLng,
             "meetLat" to meetLat,
             "meetLng" to meetLng,
-            "rsvpYesCount" to rsvpYesCount.coerceAtLeast(0L),
-            "rsvpMaybeCount" to rsvpMaybeCount.coerceAtLeast(0L),
-            "rsvpNoCount" to rsvpNoCount.coerceAtLeast(0L),
-            "myRsvp" to RsvpChoice.fromString(myRsvp).name,
-            "rsvpByUser" to rsvpByUser,
             "albumPhotos" to albumPhotos.take(20).map { it.take(500) },
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -425,9 +427,15 @@ data class GroupChatMessage(
     val sharedOutingId: String = "",
     val sharedOutingTitle: String = "",
     val reactions: List<String> = emptyList(),
+    val reactionsByUser: Map<String, String> = emptyMap(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    fun effectiveReactions(): List<String> {
+        val fromMap = reactionsByUser.values.filter { it.isNotBlank() }.distinct()
+        return if (fromMap.isNotEmpty()) fromMap else reactions
+    }
+
     fun toCreateMap(uid: String): Map<String, Any> {
         val validType = if (messageType in listOf("TEXT", "VOICE", "OUTING_SHARE", "STORY_REACTION")) {
             messageType
@@ -446,7 +454,8 @@ data class GroupChatMessage(
             "transcription" to transcription.take(1000),
             "sharedOutingId" to sharedOutingId.take(128),
             "sharedOutingTitle" to sharedOutingTitle.take(120),
-            "reactions" to reactions.take(10).map { it.take(500) },
+            "reactions" to emptyList<String>(),
+            "reactionsByUser" to emptyMap<String, String>(),
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -464,9 +473,12 @@ data class OutingStory(
     val mediaUri: String = "story_sunset",
     val outingTitle: String = "Salida en grupo",
     val likesCount: Long = 0L,
+    val likedByUser: Map<String, Boolean> = emptyMap(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    fun isLikedBy(uid: String?): Boolean = !uid.isNullOrBlank() && likedByUser[uid] == true
+
     fun toCreateMap(uid: String): Map<String, Any> {
         val effectiveGroupId = SocialSessionPolicy.resolveGroupIdForWrite(groupId, uid)
         return mapOf(
@@ -477,7 +489,8 @@ data class OutingStory(
             "filterStyle" to filterStyle.take(40).ifBlank { "OBSIDIAN" },
             "mediaUri" to mediaUri.take(500).ifBlank { "story_sunset" },
             "outingTitle" to outingTitle.take(120),
-            "likesCount" to likesCount.coerceAtLeast(0L),
+            "likesCount" to 0L,
+            "likedByUser" to emptyMap<String, Boolean>(),
             "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
             "updatedAt" to FieldValue.serverTimestamp()
         )

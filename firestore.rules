@@ -392,7 +392,104 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
     }
 
-    // 2. Outing Validation Blueprint (kept compatible with upcoming AI Studio content-creation rules)
+    // --- Content Scope & Self-Only Interactive Delta Helpers ---
+    function isPersonalScope(groupId) {
+      return isSignedIn() && groupId is string && groupId == ('personal_' + request.auth.uid);
+    }
+
+    // Only current members of a v2/legacy group OR the user's own personal_<uid> scope can write content.
+    function canAccessGroupScope(groupId) {
+      return isSignedIn() && isValidId(groupId) && (
+        isPersonalScope(groupId) ||
+        isGroupMember(groupId)
+      );
+    }
+
+    function canAccessStoryScope(data) {
+      return isSignedIn() && (
+        (!('groupId' in data) || data.groupId == '')
+          ? (data.authorId == request.auth.uid)
+          : canAccessGroupScope(data.groupId)
+      );
+    }
+
+    function mapOrEmpty(data, key) {
+      return (key in data && data[key] is map) ? data[key] : {};
+    }
+
+    function rsvpChoiceInMap(rsvpMap, uid) {
+      return (uid in rsvpMap) ? rsvpMap[uid] : 'NONE';
+    }
+
+    // Prevents forging initial RSVP counters or third-party RSVP entries on outing creation.
+    function isValidInitialOutingRsvp(data, uid) {
+      let rsvpMap = mapOrEmpty(data, 'rsvpByUser');
+      return (
+        rsvpMap.size() == 0 &&
+        data.myRsvp == 'NONE' &&
+        data.rsvpYesCount == 0 &&
+        data.rsvpMaybeCount == 0 &&
+        data.rsvpNoCount == 0
+      ) || (
+        rsvpMap.size() == 1 &&
+        rsvpMap.keys().hasOnly([uid]) &&
+        rsvpMap[uid] in ['YES', 'MAYBE', 'NO'] &&
+        data.myRsvp == rsvpMap[uid] &&
+        data.rsvpYesCount == (rsvpMap[uid] == 'YES' ? 1 : 0) &&
+        data.rsvpMaybeCount == (rsvpMap[uid] == 'MAYBE' ? 1 : 0) &&
+        data.rsvpNoCount == (rsvpMap[uid] == 'NO' ? 1 : 0)
+      );
+    }
+
+    // Enforces self-only RSVP key mutation + mathematically exact (+1/0/-1) counter deltas.
+    function isValidSelfRsvpUpdate(oldData, newData, uid) {
+      let oldMap = mapOrEmpty(oldData, 'rsvpByUser');
+      let newMap = mapOrEmpty(newData, 'rsvpByUser');
+      let oldChoice = rsvpChoiceInMap(oldMap, uid);
+      let newChoice = rsvpChoiceInMap(newMap, uid);
+      return newData.diff(oldData).affectedKeys().hasOnly([
+               'rsvpByUser', 'rsvpYesCount', 'rsvpMaybeCount', 'rsvpNoCount', 'updatedAt'
+             ]) &&
+             newMap.diff(oldMap).affectedKeys().hasOnly([uid]) &&
+             (newChoice == 'NONE' ? !(uid in newMap) : newChoice in ['YES', 'MAYBE', 'NO']) &&
+             newData.rsvpYesCount == oldData.rsvpYesCount + (newChoice == 'YES' ? 1 : 0) - (oldChoice == 'YES' ? 1 : 0) &&
+             newData.rsvpMaybeCount == oldData.rsvpMaybeCount + (newChoice == 'MAYBE' ? 1 : 0) - (oldChoice == 'MAYBE' ? 1 : 0) &&
+             newData.rsvpNoCount == oldData.rsvpNoCount + (newChoice == 'NO' ? 1 : 0) - (oldChoice == 'NO' ? 1 : 0);
+    }
+
+    function isValidSelfChatReactionUpdate(oldData, newData, uid) {
+      let oldMap = mapOrEmpty(oldData, 'reactionsByUser');
+      let newMap = mapOrEmpty(newData, 'reactionsByUser');
+      return newData.diff(oldData).affectedKeys().hasOnly(['reactionsByUser', 'updatedAt']) &&
+             newMap.diff(oldMap).affectedKeys().hasOnly([uid]) &&
+             (!(uid in newMap) || (newMap[uid] is string && newMap[uid].size() >= 1 && newMap[uid].size() <= 16));
+    }
+
+    function isValidInitialStoryLikes(data, uid) {
+      let likedMap = mapOrEmpty(data, 'likedByUser');
+      return (
+        likedMap.size() == 0 &&
+        data.likesCount == 0
+      ) || (
+        likedMap.size() == 1 &&
+        likedMap.keys().hasOnly([uid]) &&
+        likedMap[uid] == true &&
+        data.likesCount == 1
+      );
+    }
+
+    function isValidSelfStoryLikeUpdate(oldData, newData, uid) {
+      let oldMap = mapOrEmpty(oldData, 'likedByUser');
+      let newMap = mapOrEmpty(newData, 'likedByUser');
+      let wasLiked = (uid in oldMap && oldMap[uid] == true);
+      let isLiked = (uid in newMap && newMap[uid] == true);
+      return newData.diff(oldData).affectedKeys().hasOnly(['likedByUser', 'likesCount', 'updatedAt']) &&
+             newMap.diff(oldMap).affectedKeys().hasOnly([uid]) &&
+             (!(uid in newMap) || newMap[uid] == true) &&
+             newData.likesCount == oldData.likesCount + (isLiked ? 1 : 0) - (wasLiked ? 1 : 0);
+    }
+
+    // 2. Outing Validation Blueprint (hardened content authorization, immutability & verifiable self-only RSVPs)
     function isValidOuting(data) {
       return data.keys().hasAll([
                'ownerId', 'groupId', 'title', 'location', 'meetingPoint',
@@ -440,26 +537,42 @@ service cloud.firestore {
       allow list: if isSignedIn() &&
                      (resource.data.ownerId == request.auth.uid || isGroupMember(resource.data.groupId));
 
+      // Only current members of groupId (or own personal_<uid> scope) can create outings,
+      // and initial RSVP counters/map cannot be forged.
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
-                       incoming().ownerId == request.auth.uid;
+                       incoming().ownerId == request.auth.uid &&
+                       canAccessGroupScope(incoming().groupId) &&
+                       isValidInitialOutingRsvp(incoming(), request.auth.uid);
 
+      // ownerId, groupId, and createdAt are strictly immutable.
+      // Editorial edits & status changes (including CANCELLED) are strictly owner-only.
+      // Any current member (including owner) may update ONLY their own RSVP key + exact delta.
       allow update: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
-                       (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId)) &&
+                       canAccessGroupScope(existing().groupId) &&
                        incoming().ownerId == existing().ownerId &&
+                       incoming().groupId == existing().groupId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'groupId', 'title', 'location', 'meetingPoint',
-                         'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
-                         'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
-                         'meetLat', 'meetLng', 'rsvpYesCount', 'rsvpMaybeCount',
-                         'rsvpNoCount', 'myRsvp', 'rsvpByUser', 'albumPhotos', 'updatedAt'
-                       ]);
+                       (
+                         (
+                           existing().ownerId == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'title', 'location', 'meetingPoint',
+                             'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
+                             'additionalInfo', 'placePhotoUrl', 'destLat', 'destLng',
+                             'meetLat', 'meetLng', 'albumPhotos', 'updatedAt'
+                           ])
+                         ) ||
+                         isValidSelfRsvpUpdate(existing(), incoming(), request.auth.uid)
+                       );
 
-      allow delete: if isSignedIn() && isValidId(outingId) && existing().ownerId == request.auth.uid;
+      allow delete: if isSignedIn() &&
+                       isValidId(outingId) &&
+                       existing().ownerId == request.auth.uid &&
+                       canAccessGroupScope(existing().groupId);
     }
 
     // 3. GroupChatMessage Validation Blueprint
@@ -472,7 +585,7 @@ service cloud.firestore {
              data.keys().hasOnly([
                'senderId', 'senderName', 'groupId', 'text', 'messageType',
                'audioDurationSec', 'audioUrl', 'transcription', 'sharedOutingId',
-               'sharedOutingTitle', 'reactions', 'createdAt', 'updatedAt'
+               'sharedOutingTitle', 'reactions', 'reactionsByUser', 'createdAt', 'updatedAt'
              ]) &&
              data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
@@ -485,6 +598,7 @@ service cloud.firestore {
              data.sharedOutingId is string && data.sharedOutingId.size() <= 128 &&
              data.sharedOutingTitle is string && data.sharedOutingTitle.size() <= 120 &&
              isValidStringList(data.reactions, 10) &&
+             (!('reactionsByUser' in data) || (data.reactionsByUser is map && data.reactionsByUser.size() <= 50)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -495,24 +609,35 @@ service cloud.firestore {
       allow list: if isSignedIn() &&
                      (resource.data.senderId == request.auth.uid || isGroupMember(resource.data.groupId));
 
+      // Non-members CANNOT create chat messages for other groups or other users' personal scopes.
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
-                       incoming().senderId == request.auth.uid;
+                       incoming().senderId == request.auth.uid &&
+                       canAccessGroupScope(incoming().groupId) &&
+                       incoming().reactions.size() == 0 &&
+                       (!('reactionsByUser' in incoming()) || incoming().reactionsByUser.size() == 0);
 
+      // senderId, groupId, and createdAt are immutable; reactions are strictly self-keyed in reactionsByUser.
       allow update: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
+                       canAccessGroupScope(existing().groupId) &&
                        incoming().senderId == existing().senderId &&
+                       incoming().groupId == existing().groupId &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         (existing().senderId == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['text', 'transcription', 'reactions', 'updatedAt'])) ||
-                         (isGroupMember(existing().groupId) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']))
+                         (
+                           existing().senderId == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'transcription', 'updatedAt'])
+                         ) ||
+                         isValidSelfChatReactionUpdate(existing(), incoming(), request.auth.uid)
                        );
 
-      allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
+      allow delete: if isSignedIn() &&
+                       isValidId(messageId) &&
+                       existing().senderId == request.auth.uid &&
+                       canAccessGroupScope(existing().groupId);
     }
 
     // 4. OutingStory Validation Blueprint
@@ -523,7 +648,7 @@ service cloud.firestore {
              ]) &&
              data.keys().hasOnly([
                'authorId', 'authorName', 'groupId', 'caption', 'filterStyle',
-               'mediaUri', 'outingTitle', 'likesCount', 'createdAt', 'updatedAt'
+               'mediaUri', 'outingTitle', 'likesCount', 'likedByUser', 'createdAt', 'updatedAt'
              ]) &&
              data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
              data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
@@ -533,34 +658,48 @@ service cloud.firestore {
              data.mediaUri is string && data.mediaUri.size() <= 500 &&
              data.outingTitle is string && data.outingTitle.size() <= 120 &&
              data.likesCount is int && data.likesCount >= 0 &&
+             (!('likedByUser' in data) || (data.likedByUser is map && data.likedByUser.size() <= 50)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
     match /stories/{storyId} {
       allow get: if isSignedIn() && isValidId(storyId) &&
-                    (existing().authorId == request.auth.uid || ('groupId' in existing() && isGroupMember(existing().groupId)));
+                    (existing().authorId == request.auth.uid ||
+                     ('groupId' in existing() && existing().groupId != '' && isGroupMember(existing().groupId)));
       allow list: if isSignedIn() &&
-                     (resource.data.authorId == request.auth.uid || ('groupId' in resource.data && isGroupMember(resource.data.groupId)));
+                     (resource.data.authorId == request.auth.uid ||
+                      ('groupId' in resource.data && resource.data.groupId != '' && isGroupMember(resource.data.groupId)));
 
+      // Non-members CANNOT publish stories to other groups; initial likesCount cannot be forged.
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&
                        isValidStory(incoming()) &&
-                       incoming().authorId == request.auth.uid;
+                       incoming().authorId == request.auth.uid &&
+                       canAccessStoryScope(incoming()) &&
+                       isValidInitialStoryLikes(incoming(), request.auth.uid);
 
+      // authorId, groupId, and createdAt are immutable; likes are strictly self-keyed with exact +1/-1 delta.
       allow update: if isSignedIn() &&
                        isValidId(storyId) &&
                        isValidStory(incoming()) &&
+                       canAccessStoryScope(existing()) &&
                        incoming().authorId == existing().authorId &&
+                       (('groupId' in incoming()) == ('groupId' in existing())) &&
+                       (!('groupId' in existing()) || incoming().groupId == existing().groupId) &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         (existing().authorId == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'likesCount', 'updatedAt'])) ||
-                         ('groupId' in existing() && isGroupMember(existing().groupId) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']))
+                         (
+                           existing().authorId == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'updatedAt'])
+                         ) ||
+                         isValidSelfStoryLikeUpdate(existing(), incoming(), request.auth.uid)
                        );
 
-      allow delete: if isSignedIn() && isValidId(storyId) && existing().authorId == request.auth.uid;
+      allow delete: if isSignedIn() &&
+                       isValidId(storyId) &&
+                       existing().authorId == request.auth.uid &&
+                       canAccessStoryScope(existing());
     }
   }
 }

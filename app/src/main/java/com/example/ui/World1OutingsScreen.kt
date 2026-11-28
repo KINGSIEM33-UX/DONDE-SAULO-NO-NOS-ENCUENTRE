@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.Outing
 import com.example.data.OutingStatus
 import com.example.data.RsvpChoice
+import com.example.data.SocialContentAuthzPolicy
 import com.example.data.todayIsoDate
 import com.example.ui.theme.StatusCancelledOuter
 import com.example.ui.theme.StatusCancelledRed
@@ -458,9 +459,16 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 else -> {
                     itemsIndexed(upcomingOutings, key = { _, o -> o.id }) { index, outing ->
                         AnimatedStaggeredItem(index = index) {
+                            val canEditOuting = SocialContentAuthzPolicy.canEditOrCancelOuting(
+                                outing = outing,
+                                currentUserId = currentUserId,
+                                isGuestDemo = syncState.isGuestDemo
+                            )
                             EditorialOutingCard(
                                 outing = outing,
                                 currentUserId = currentUserId,
+                                isGuestDemo = syncState.isGuestDemo,
+                                canEdit = canEditOuting,
                                 onCardClick = { activeDetailOuting = outing },
                                 onEditClick = {
                                     editingOuting = outing
@@ -505,9 +513,16 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     // --- QUICK DETAIL & RSVP DIALOG ---
     activeDetailOuting?.let { currentOuting ->
         val freshOuting = outings.firstOrNull { it.id == currentOuting.id } ?: currentOuting
+        val canEditDetail = SocialContentAuthzPolicy.canEditOrCancelOuting(
+            outing = freshOuting,
+            currentUserId = currentUserId,
+            isGuestDemo = syncState.isGuestDemo
+        )
         OutingQuickDetailDialog(
             outing = freshOuting,
             currentUserId = currentUserId,
+            isGuestDemo = syncState.isGuestDemo,
+            canEdit = canEditDetail,
             onDismiss = { activeDetailOuting = null },
             onRsvpChange = { choice -> viewModel.updateOutingRsvp(freshOuting.id, choice) },
             onStatusChange = { newStatus -> viewModel.updateOutingStatusColor(freshOuting.id, newStatus) },
@@ -702,6 +717,8 @@ private fun CalendarLegendItem(
 private fun EditorialOutingCard(
     outing: Outing,
     currentUserId: String?,
+    isGuestDemo: Boolean = true,
+    canEdit: Boolean = true,
     onCardClick: () -> Unit,
     onEditClick: () -> Unit,
     onRsvpSelected: (RsvpChoice) -> Unit
@@ -711,7 +728,7 @@ private fun EditorialOutingCard(
         OutingStatus.PLANNED -> StatusPlannedGray
         OutingStatus.CANCELLED -> StatusCancelledRed
     }
-    val userRsvp = outing.rsvpChoiceFor(currentUserId)
+    val userRsvp = SocialContentAuthzPolicy.effectiveOutingRsvpForUser(outing, currentUserId, isGuestDemo)
 
     SpotlightEditorialCard(
         modifier = Modifier.fillMaxWidth(),
@@ -740,13 +757,15 @@ private fun EditorialOutingCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = onEditClick, modifier = Modifier.size(34.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Editar salida",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(17.dp)
-                    )
+                if (canEdit) {
+                    IconButton(onClick = onEditClick, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Editar salida",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
                 }
             }
 
@@ -800,7 +819,7 @@ private fun EditorialOutingCard(
                         activeContentColor = Color.White
                     )
                 ),
-                selectedId = userRsvp?.name,
+                selectedId = userRsvp.takeIf { it != RsvpChoice.NONE }?.name,
                 onSelect = { id ->
                     RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpSelected)
                 },
@@ -814,6 +833,8 @@ private fun EditorialOutingCard(
 fun OutingQuickDetailDialog(
     outing: Outing,
     currentUserId: String?,
+    isGuestDemo: Boolean = true,
+    canEdit: Boolean = true,
     onDismiss: () -> Unit,
     onRsvpChange: (RsvpChoice) -> Unit,
     onStatusChange: (OutingStatus) -> Unit,
@@ -826,7 +847,7 @@ fun OutingQuickDetailDialog(
         OutingStatus.PLANNED -> StatusPlannedGray
         OutingStatus.CANCELLED -> StatusCancelledRed
     }
-    val userRsvp = outing.rsvpChoiceFor(currentUserId)
+    val userRsvp = SocialContentAuthzPolicy.effectiveOutingRsvpForUser(outing, currentUserId, isGuestDemo)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -870,22 +891,30 @@ fun OutingQuickDetailDialog(
                         RubberSegmentOption(RsvpChoice.MAYBE.name, "Duda", StatusPlannedGray, Color.White),
                         RubberSegmentOption(RsvpChoice.NO.name, "No", StatusCancelledRed, Color.White)
                     ),
-                    selectedId = userRsvp?.name,
+                    selectedId = userRsvp.takeIf { it != RsvpChoice.NONE }?.name,
                     onSelect = { id -> RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpChange) },
                     height = 40.dp
                 )
 
-                Text("Estado en el calendario", style = MaterialTheme.typography.labelLarge)
-                RubberSegmentedBar(
-                    options = listOf(
-                        RubberSegmentOption(OutingStatus.CONFIRMED.name, "Confirmada", StatusConfirmedGreen, Color.White),
-                        RubberSegmentOption(OutingStatus.PLANNED.name, "Pensada", StatusPlannedGray, Color.White),
-                        RubberSegmentOption(OutingStatus.CANCELLED.name, "Cancelada", StatusCancelledRed, Color.White)
-                    ),
-                    selectedId = outing.outingStatus.name,
-                    onSelect = { id -> OutingStatus.entries.firstOrNull { it.name == id }?.let(onStatusChange) },
-                    height = 38.dp
-                )
+                if (canEdit) {
+                    Text("Estado en el calendario", style = MaterialTheme.typography.labelLarge)
+                    RubberSegmentedBar(
+                        options = listOf(
+                            RubberSegmentOption(OutingStatus.CONFIRMED.name, "Confirmada", StatusConfirmedGreen, Color.White),
+                            RubberSegmentOption(OutingStatus.PLANNED.name, "Pensada", StatusPlannedGray, Color.White),
+                            RubberSegmentOption(OutingStatus.CANCELLED.name, "Cancelada", StatusCancelledRed, Color.White)
+                        ),
+                        selectedId = outing.outingStatus.name,
+                        onSelect = { id -> OutingStatus.entries.firstOrNull { it.name == id }?.let(onStatusChange) },
+                        height = 38.dp
+                    )
+                } else {
+                    Text(
+                        text = "Solo el creador de esta salida puede editar sus datos o cambiar su estado.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = onOpenOnMap, modifier = Modifier.weight(1f)) {
@@ -902,7 +931,9 @@ fun OutingQuickDetailDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onEdit) { Text("Editar") }
+            if (canEdit) {
+                Button(onClick = onEdit) { Text("Editar") }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cerrar") }
