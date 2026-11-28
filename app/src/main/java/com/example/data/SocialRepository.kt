@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.R
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
@@ -350,9 +351,7 @@ class SocialRepository(
         try {
             db.runTransaction { tx ->
                 val snap = tx.get(docRef)
-                if (!snap.exists()) {
-                    throw IllegalStateException("No existe la salida $outingId")
-                }
+                if (!snap.exists()) throw IllegalStateException("No existe la salida $outingId")
                 val current = snap.toObject(Outing::class.java)
                     ?: throw IllegalStateException("La salida $outingId no tiene un formato válido")
                 val photos = (listOf(photoUrl) + current.albumPhotos).distinct().take(20)
@@ -365,7 +364,7 @@ class SocialRepository(
             throw e
         }
     }
-
+    /** Atomically changes only the caller's RSVP map entry and exact counter deltas. */
     suspend fun updateOutingRsvpTransactional(
         outingId: String,
         userId: String = requireUserId(),
@@ -377,25 +376,24 @@ class SocialRepository(
                 val snap = tx.get(docRef)
                 if (!snap.exists()) return@runTransaction
                 val current = snap.toObject(Outing::class.java) ?: return@runTransaction
-                val updatedMap = current.rsvpByUser.toMutableMap()
-                if (choice == RsvpChoice.NONE) {
-                    updatedMap.remove(userId)
-                } else {
-                    updatedMap[userId] = choice.name
-                }
-                val yesCount = updatedMap.values.count { it == RsvpChoice.YES.name }.toLong()
-                val maybeCount = updatedMap.values.count { it == RsvpChoice.MAYBE.name }.toLong()
-                val noCount = updatedMap.values.count { it == RsvpChoice.NO.name }.toLong()
+                val plan = SocialContentAuthzPolicy.computeSelfRsvpTransition(
+                    existingByUser = current.rsvpByUser,
+                    existingYes = current.rsvpYesCount,
+                    existingMaybe = current.rsvpMaybeCount,
+                    existingNo = current.rsvpNoCount,
+                    userId = userId,
+                    newChoice = choice
+                )
+                if (plan.isNoOp) return@runTransaction
+
+                val ownValue: Any = if (choice == RsvpChoice.NONE) FieldValue.delete() else choice.name
                 tx.update(
                     docRef,
-                    mapOf(
-                        "rsvpByUser" to updatedMap,
-                        "rsvpYesCount" to yesCount,
-                        "rsvpMaybeCount" to maybeCount,
-                        "rsvpNoCount" to noCount,
-                        "myRsvp" to choice.name,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
+                    FieldPath.of("rsvpByUser", userId), ownValue,
+                    FieldPath.of("rsvpYesCount"), FieldValue.increment(plan.yesDelta),
+                    FieldPath.of("rsvpMaybeCount"), FieldValue.increment(plan.maybeDelta),
+                    FieldPath.of("rsvpNoCount"), FieldValue.increment(plan.noDelta),
+                    FieldPath.of("updatedAt"), FieldValue.serverTimestamp()
                 )
             }.await()
         } catch (e: CancellationException) {
@@ -459,15 +457,44 @@ class SocialRepository(
         }
     }
 
-    suspend fun updateMessageReactions(messageId: String, reactions: List<String>): Result<Unit> = runCatching {
+    /**
+     * Legacy list-based API retained for source compatibility; it cannot identify an owner safely.
+     */
+    @Deprecated("Use toggleMessageReactionTransactional for self-only reactions")
+    suspend fun updateMessageReactions(messageId: String, reactions: List<String>): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Las reacciones deben actualizarse por usuario autenticado."))
+
+    /**
+     * Atomically toggles ONLY the caller's own reaction entry in reactionsByUser[userId]
+     * without overwriting legacy reactions or other members' reactions.
+     */
+    suspend fun toggleMessageReactionTransactional(
+        messageId: String,
+        userId: String = requireUserId(),
+        emoji: String
+    ): Result<Unit> = runCatching {
         val docRef = db.collection(CHAT_COLLECTION).document(messageId)
         try {
-            docRef.update(
-                mapOf(
-                    "reactions" to reactions.take(10),
-                    "updatedAt" to FieldValue.serverTimestamp()
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (!snap.exists()) return@runTransaction
+                val current = snap.toObject(GroupChatMessage::class.java) ?: return@runTransaction
+                val plan = SocialContentAuthzPolicy.computeSelfChatReactionTransition(
+                    existingReactionsByUser = current.reactionsByUser,
+                    userId = userId,
+                    emoji = emoji
                 )
-            ).await()
+                val ownValue: Any = if (plan.removed || plan.emoji == null) {
+                    FieldValue.delete()
+                } else {
+                    plan.emoji
+                }
+                tx.update(
+                    docRef,
+                    FieldPath.of("reactionsByUser", userId), ownValue,
+                    FieldPath.of("updatedAt"), FieldValue.serverTimestamp()
+                )
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -517,15 +544,38 @@ class SocialRepository(
         }
     }
 
-    suspend fun likeStory(storyId: String, newLikesCount: Long): Result<Unit> = runCatching {
+    /** Legacy count-based API retained for source compatibility; arbitrary count writes are unsafe. */
+    @Deprecated("Use toggleStoryLikeTransactional for self-only likes")
+    suspend fun likeStory(storyId: String, newLikesCount: Long): Result<Unit> =
+        Result.failure(UnsupportedOperationException("Los likes deben actualizarse por usuario autenticado."))
+
+    /**
+     * Atomically toggles ONLY the caller's own like key in likedByUser[userId]
+     * with an exact FieldValue.increment(+1/-1) delta on likesCount.
+     */
+    suspend fun toggleStoryLikeTransactional(
+        storyId: String,
+        userId: String = requireUserId()
+    ): Result<Unit> = runCatching {
         val docRef = db.collection(STORIES_COLLECTION).document(storyId)
         try {
-            docRef.update(
-                mapOf(
-                    "likesCount" to newLikesCount.coerceAtLeast(0L),
-                    "updatedAt" to FieldValue.serverTimestamp()
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (!snap.exists()) return@runTransaction
+                val current = snap.toObject(OutingStory::class.java) ?: return@runTransaction
+                val plan = SocialContentAuthzPolicy.computeSelfStoryLikeTransition(
+                    existingLikedByUser = current.likedByUser,
+                    existingLikesCount = current.likesCount,
+                    userId = userId
                 )
-            ).await()
+                val ownValue: Any = if (plan.isLiked) true else FieldValue.delete()
+                tx.update(
+                    docRef,
+                    FieldPath.of("likedByUser", userId), ownValue,
+                    FieldPath.of("likesCount"), FieldValue.increment(plan.likesDelta),
+                    FieldPath.of("updatedAt"), FieldValue.serverTimestamp()
+                )
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

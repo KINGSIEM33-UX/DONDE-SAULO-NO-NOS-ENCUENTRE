@@ -914,7 +914,11 @@ fun World1MapScreen(viewModel: MainViewModel) {
                 OutingStatus.PLANNED -> StatusPlannedGray
                 OutingStatus.CANCELLED -> StatusCancelledRed
             }
-            val userRsvp = selected.rsvpChoiceFor(currentUserId)
+            val userRsvp = com.example.data.SocialContentAuthzPolicy.effectiveOutingRsvpForUser(
+                outing = selected,
+                currentUserId = currentUserId,
+                isGuestDemo = currentUserId == null
+            )
 
             Card(
                 shape = RoundedCornerShape(24.dp),
