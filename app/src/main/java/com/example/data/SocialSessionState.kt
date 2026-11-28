@@ -80,6 +80,7 @@ object SocialSessionPolicy {
     const val GUEST_DEMO_GROUP_ID = "QUEDA-2026"
     const val PERSONAL_GROUP_PREFIX = "personal_"
     private const val MAX_FIRESTORE_ID_LENGTH = 128
+    private const val MAX_DIRECT_UID_LENGTH = MAX_FIRESTORE_ID_LENGTH - PERSONAL_GROUP_PREFIX.length
 
     val GUEST_DEMO_OUTING_IDS: Set<String> = setOf(
         "outing_upcoming_confirmed",
@@ -158,20 +159,27 @@ object SocialSessionPolicy {
     fun resolveGroupIdForWrite(profileGroupId: String, uid: String): String {
         val cleanGroup = profileGroupId.trim().take(128)
         if (cleanGroup.isNotBlank()) return cleanGroup
-        // Keep the contract expected by the personal-scope rules whenever the
-        // Firebase UID itself is a valid Firestore ID component and fits.
-        if (uid.matches(Regex("[a-zA-Z0-9_\\-]+")) &&
-            PERSONAL_GROUP_PREFIX.length + uid.length <= MAX_FIRESTORE_ID_LENGTH
-        ) {
-            return PERSONAL_GROUP_PREFIX + uid
-        }
+        return personalScopeId(uid)
+    }
 
-        // UID formats outside that contract (or an unusually long UID) still
-        // need a stable, collision-resistant ID rather than lossy truncation.
+    /**
+     * Canonical personal scope shared with firestore.rules. Only the restricted
+     * ASCII UID subset gets a readable scope; every other UID is SHA-256 hashed
+     * from its UTF-8 bytes, including UIDs beginning with "sha256_".
+     */
+    fun personalScopeId(uid: String): String {
+        if (isDirectPersonalUid(uid)) return PERSONAL_GROUP_PREFIX + uid
+
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(uid.toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
-        return PERSONAL_GROUP_PREFIX + digest
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return "${PERSONAL_GROUP_PREFIX}sha256_$digest"
+    }
+
+    fun isDirectPersonalUid(uid: String): Boolean {
+        return uid.length in 1..MAX_DIRECT_UID_LENGTH &&
+            uid.matches(Regex("[a-zA-Z0-9_\\-]+")) &&
+            !uid.startsWith("sha256_")
     }
 
     /**

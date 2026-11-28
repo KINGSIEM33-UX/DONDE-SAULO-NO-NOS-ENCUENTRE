@@ -231,6 +231,9 @@ class SocialRepository(
     }
 
     // --- 2. Outings (Salidas y Quedadas) ---
+    // Personal reads intentionally scope by ownerId, not by the canonical groupId.
+    // This keeps pre-existing personal_<sha256> records visible to their owner;
+    // canonical writes use SocialSessionPolicy.personalScopeId().
     fun observeOutings(userId: String = requireUserId()): Flow<List<Outing>> {
         return db.collection(OUTINGS_COLLECTION)
             .whereEqualTo("ownerId", userId)
@@ -416,6 +419,8 @@ class SocialRepository(
     }
 
     // --- 3. Group Chat Messages ---
+    // As with outings, sender-scoped reads retain legacy personal records without
+    // a destructive migration or a second listener that could duplicate items.
     fun observeChatMessages(userId: String = requireUserId()): Flow<List<GroupChatMessage>> {
         return db.collection(CHAT_COLLECTION)
             .whereEqualTo("senderId", userId)
@@ -472,6 +477,8 @@ class SocialRepository(
     }
 
     // --- 4. Instantaneas (Stories) ---
+    // Author-scoped reads deliberately do not assume a particular personal groupId
+    // so legacy fallback scopes remain observable by their owner.
     fun observeStories(userId: String = requireUserId()): Flow<List<OutingStory>> {
         return db.collection(STORIES_COLLECTION)
             .whereEqualTo("authorId", userId)

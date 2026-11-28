@@ -216,6 +216,33 @@ class SocialSessionPolicyTest {
     }
 
     @Test
+    fun personalScopeId_matchesCanonicalAsciiBoundariesAndExcludesSha256Prefix() {
+        assertThat(SocialSessionPolicy.personalScopeId("a"))
+            .isEqualTo("personal_a")
+        assertThat(SocialSessionPolicy.personalScopeId("a".repeat(119)))
+            .isEqualTo("personal_" + "a".repeat(119))
+        assertThat(SocialSessionPolicy.personalScopeId("a".repeat(120)))
+            .startsWith("personal_sha256_")
+        assertThat(SocialSessionPolicy.personalScopeId("sha256_user"))
+            .startsWith("personal_sha256_")
+        assertThat(SocialSessionPolicy.isDirectPersonalUid("sha256_user")).isFalse()
+    }
+
+    @Test
+    fun personalScopeId_hashesUnicodeAndAstralUidsFromUtf8WithoutCollisions() {
+        val accented = "usuario-é"
+        val astral = "usuario-😀"
+        val accentedScope = SocialSessionPolicy.personalScopeId(accented)
+        val astralScope = SocialSessionPolicy.personalScopeId(astral)
+
+        assertThat(accentedScope).matches("personal_sha256_[0-9a-f]{64}")
+        assertThat(astralScope).matches("personal_sha256_[0-9a-f]{64}")
+        assertThat(accentedScope).isNotEqualTo(astralScope)
+        assertThat(accentedScope).isEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", accented))
+        assertThat(astralScope).isEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", astral))
+    }
+
+    @Test
     fun shouldShowEmptyState_neverConfusesLoadingOrErrorWithEmpty() {
         assertThat(SocialSessionPolicy.shouldShowEmptyState(CloudLoadState.Loading, 0)).isFalse()
         assertThat(SocialSessionPolicy.shouldShowEmptyState(CloudLoadState.Error("Error de red"), 0)).isFalse()
