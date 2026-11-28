@@ -42,6 +42,7 @@ import java.text.DateFormat
 fun GroupFeedScreen(viewModel: MainViewModel) {
     val state by viewModel.groupFeedState.collectAsStateWithLifecycle()
     val activeGroup by viewModel.activeSocialGroup.collectAsStateWithLifecycle()
+    val visiblePosts = viewModel.visibleGroupFeedPosts(state.posts)
     var draft by remember { mutableStateOf("") }
 
     LaunchedEffect(activeGroup?.id, state.publishSuccessToken) {
@@ -101,7 +102,7 @@ fun GroupFeedScreen(viewModel: MainViewModel) {
                 GroupFeedStatus.READY -> LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) { items(state.posts, key = { it.id }) { post -> GroupPostCard(post, viewModel) } }
+                ) { items(visiblePosts, key = { it.id }) { post -> GroupPostCard(post, viewModel) } }
                 GroupFeedStatus.SIGNED_OUT -> Unit
             }
         }

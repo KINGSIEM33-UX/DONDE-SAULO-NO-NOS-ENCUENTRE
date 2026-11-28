@@ -723,6 +723,8 @@ class MainViewModel(
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupFeedJob?.cancel()
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
 
         activeSocialGroup.value = null
         groupMembers.value = emptyList()
@@ -935,6 +937,10 @@ class MainViewModel(
         return com.example.data.isCurrentGroupFeedScope(currentUserId.value, uid, observedGroupId, groupId)
     }
 
+    private fun isCurrentWriteScope(uid: String, groupId: String): Boolean {
+        return currentUserId.value == uid && resolveActiveWriteGroupId() == groupId
+    }
+
     private fun stopCloudObservers() {
         cloudObserverGeneration += 1
         cloudSessionGeneration += 1
@@ -944,6 +950,7 @@ class MainViewModel(
         chatJob?.cancel()
         storiesJob?.cancel()
         groupFeedJob?.cancel()
+        groupFeedState.value = GroupFeedState(status = GroupFeedStatus.SIGNED_OUT)
         profileJob = null
         groupJob = null
         outingsJob = null
@@ -1026,14 +1033,14 @@ class MainViewModel(
         val repo = socialRepository
         if (uid != null) {
             if (repo == null) return Result.failure(IllegalStateException("Repositorio Firestore no disponible"))
-            val saved = try { repo.updateUserAvatar(uid, newAvatar) } catch (e: CancellationException) { throw e }
+            val saved = try { repo.updateUserProfileInfo(uid, updated) } catch (e: CancellationException) { throw e }
             if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
             if (currentUserId.value != expectedUid || activeGroupId() != expectedGroupId) {
                 return Result.failure(IllegalStateException("La sesión o el grupo cambiaron durante el guardado"))
             }
         }
         userProfile.value = updated
-        Result.success(Unit)
+        return Result.success(Unit)
     }
 
     fun addCuriosity(item: String) {
@@ -1111,8 +1118,12 @@ class MainViewModel(
                         groupInviteCode = joinedGroup.inviteCode,
                         groupName = joinedGroup.name
                     )
+                    val profileSaved = repo.saveUserProfile(updated, uid)
+                    if (profileSaved.isFailure) {
+                        authStatusMessage.value = "Te has unido al grupo, pero no se pudo guardar el perfil: ${profileSaved.exceptionOrNull()?.localizedMessage}"
+                        return@onSuccess
+                    }
                     userProfile.value = updated
-                    repo.saveUserProfile(updated, uid)
                     startGroupScopedObservers(uid, joinedGroup.id, updated)
                     authStatusMessage.value = "¡Te has unido al grupo '${joinedGroup.name}' ($cleanCode)!"
                 }.onFailure { err ->
@@ -1336,23 +1347,39 @@ class MainViewModel(
                 outing
             }
         }
-        Result.success(Unit)
+        return Result.success(Unit)
     }
 
     fun deleteOuting(outingId: String) {
-        outings.value = outings.value.filterNot { it.id == outingId }
+        val previous = outings.value
+        val target = previous.firstOrNull { it.id == outingId } ?: return
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
+            val expectedGroupId = target.groupId.ifBlank { resolveActiveWriteGroupId() }
             viewModelScope.launch {
-                repo.deleteOuting(outingId).onFailure { err ->
+                repo.deleteOuting(outingId).onSuccess {
+                    if (isCurrentWriteScope(uid, expectedGroupId)) {
+                        outings.value = outings.value.filterNot { it.id == outingId }
+                    }
+                }.onFailure { err ->
+                    if (isCurrentWriteScope(uid, expectedGroupId)) outings.value = previous
                     authStatusMessage.value = "Error al eliminar la salida: ${err.localizedMessage}"
                 }
             }
+        } else {
+            outings.value = previous.filterNot { it.id == outingId }
         }
     }
 
     // --- World 1: Private group feed ---
+    fun visibleGroupFeedPosts(posts: List<GroupPost>): List<GroupPost> {
+        val uid = currentUserId.value ?: return emptyList()
+        val group = activeSocialGroup.value ?: return emptyList()
+        if (uid !in group.memberIds || !isCurrentGroupScope(uid, group.id)) return emptyList()
+        return posts.filter { it.groupId == group.id }
+    }
+
     fun createGroupPost(text: String) {
         val uid = currentUserId.value
         val repo = socialRepository
@@ -1445,15 +1472,20 @@ class MainViewModel(
             text = clean,
             messageType = "TEXT"
         )
-        groupChatMessages.value = groupChatMessages.value + msg
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
             viewModelScope.launch {
-                repo.sendChatMessage(msg, uid).onFailure { err ->
-                    authStatusMessage.value = "Error al enviar mensaje: ${err.localizedMessage}"
+                repo.sendChatMessage(msg, uid).onSuccess {
+                    if (isCurrentWriteScope(uid, msg.groupId)) groupChatMessages.value = groupChatMessages.value + msg
+                }.onFailure { err ->
+                    if (isCurrentWriteScope(uid, msg.groupId)) {
+                        authStatusMessage.value = "Error al enviar mensaje: ${err.localizedMessage}"
+                    }
                 }
             }
+        } else {
+            groupChatMessages.value = groupChatMessages.value + msg
         }
     }
 
@@ -1471,7 +1503,7 @@ class MainViewModel(
             id = "msg_${UUID.randomUUID().toString().replace("-", "").take(12)}",
             senderId = currentUserId.value ?: SocialSessionPolicy.GUEST_DEMO_USER_ID,
             senderName = userProfile.value.username.ifBlank { "Usuario" },
-            groupId = resolveActiveWriteGroupId()
+            groupId = resolveActiveWriteGroupId(),
             text = "Nota de voz (0:${cleanDur.toString().padStart(2, '0')})",
             messageType = "VOICE",
             audioDurationSec = cleanDur.toLong(),
@@ -1486,7 +1518,7 @@ class MainViewModel(
             if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
         }
         groupChatMessages.value = groupChatMessages.value + msg
-        Result.success(Unit)
+        return Result.success(Unit)
     }
 
     fun shareOutingToGroupChat(outing: Outing) {
@@ -1566,7 +1598,7 @@ class MainViewModel(
             if (saved.isFailure) return Result.failure(saved.exceptionOrNull()!!)
         }
         stories.value = listOf(story) + stories.value
-        Result.success(Unit)
+        return Result.success(Unit)
     }
 
     private fun activeGroupId(): String =

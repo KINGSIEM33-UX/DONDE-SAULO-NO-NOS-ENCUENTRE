@@ -207,6 +207,29 @@ class SocialRepository(
         }
     }
 
+    suspend fun updateUserProfileInfo(userId: String, profile: UserProfile): Result<Unit> = runCatching {
+        val docRef = db.collection(USERS_COLLECTION).document(userId)
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(docRef)
+                if (!snap.exists()) {
+                    throw IllegalStateException("No existe el perfil de usuario; no se puede actualizar su información")
+                }
+                tx.update(docRef, mapOf(
+                    "username" to profile.username.take(60).ifBlank { "Usuario" },
+                    "bio" to profile.bio.take(300),
+                    "avatarUrl" to profile.avatarUrl.take(500),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ))
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
     // --- 2. Outings (Salidas y Quedadas) ---
     fun observeOutings(userId: String = requireUserId()): Flow<List<Outing>> {
         return db.collection(OUTINGS_COLLECTION)
