@@ -50,8 +50,11 @@ class Repository(
         favoriteVerseDao.deleteFavoriteVerse(id)
     }
 
-    fun getVerseNotesForSection(sectionId: String): Flow<List<VerseNote>> =
-        verseNoteDao.getNotesForSection(sectionId)
+    fun getVerseNotesForSection(sectionId: String, bibleId: String): Flow<List<VerseNote>> =
+        verseNoteDao.getNotesForSection(sectionId, bibleId)
+
+    fun getLegacyVerseNotesForSection(sectionId: String): Flow<List<VerseNote>> =
+        verseNoteDao.getLegacyNotesForSection(sectionId)
 
     suspend fun insertVerseNote(note: VerseNote) {
         verseNoteDao.insertNote(note)

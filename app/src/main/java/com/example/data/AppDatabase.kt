@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
         RecentChapter::class,
         StudyEvent::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +34,30 @@ abstract class AppDatabase : RoomDatabase() {
         private var INSTANCE: AppDatabase? = null
 
         private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** Adds translation identity without guessing the source of legacy rows. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `verse_notes` ADD COLUMN `bibleId` TEXT")
+                db.execSQL("ALTER TABLE `favorite_verses` ADD COLUMN `bibleId` TEXT")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `recent_chapters_new` (
+                        `chapterId` TEXT NOT NULL,
+                        `bibleId` TEXT NOT NULL,
+                        `reference` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        PRIMARY KEY(`chapterId`, `bibleId`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `recent_chapters_new` (`chapterId`, `bibleId`, `reference`, `timestamp`)
+                    SELECT `chapterId`, `bibleId`, `reference`, `timestamp`
+                    FROM `recent_chapters`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `recent_chapters`")
+                db.execSQL("ALTER TABLE `recent_chapters_new` RENAME TO `recent_chapters`")
+            }
+        }
 
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -60,8 +84,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "donde_saulo_database"
                 )
-                    .addMigrations(MIGRATION_6_7)
-                    .fallbackToDestructiveMigration(dropAllTables = false)
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
                     .addCallback(DatabaseCallback(appScope))
                     .build()
                 INSTANCE = instance

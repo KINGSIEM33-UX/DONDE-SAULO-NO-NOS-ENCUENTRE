@@ -1787,11 +1787,12 @@ class MainViewModel(
         }
     }
 
-    fun saveFavoriteVerse(sectionId: String, reference: String, text: String) {
+    fun saveFavoriteVerse(sectionId: String, reference: String, text: String, bibleId: String? = null) {
         viewModelScope.launch {
             repository.insertFavoriteVerse(
                 FavoriteVerse(
                     sectionId = sectionId,
+                    bibleId = bibleId,
                     verseReference = reference,
                     verseText = text
                 )
@@ -1893,16 +1894,17 @@ class MainViewModel(
     val verseNotes: StateFlow<List<VerseNote>> = selectedSection
         .filterNotNull()
         .flatMapLatest { section ->
-            repository.getVerseNotesForSection(section.id)
+            repository.getLegacyVerseNotesForSection(section.id)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun saveVerseNote(sectionId: String, verseRef: String, note: String) {
+    fun saveVerseNote(sectionId: String, verseRef: String, note: String, bibleId: String? = null) {
         if (note.isBlank()) return
         viewModelScope.launch {
             repository.insertVerseNote(
                 VerseNote(
                     sectionId = sectionId,
+                    bibleId = bibleId,
                     verseReference = verseRef,
                     noteText = note.trim()
                 )
@@ -1912,7 +1914,7 @@ class MainViewModel(
         }
     }
 
-    fun getNotesForChapter(chapterId: String) = repository.getVerseNotesForSection(chapterId)
+    fun getNotesForChapter(chapterId: String, bibleId: String) = repository.getVerseNotesForSection(chapterId, bibleId)
 
     fun deleteVerseNote(id: Int) {
         viewModelScope.launch {

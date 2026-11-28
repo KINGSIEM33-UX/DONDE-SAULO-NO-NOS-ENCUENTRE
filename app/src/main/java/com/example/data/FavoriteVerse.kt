@@ -7,6 +7,8 @@ import androidx.room.PrimaryKey
 data class FavoriteVerse(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val sectionId: String,
+    /** Null means this favorite predates translation identity and was not safely inferable. */
+    val bibleId: String? = null,
     val verseReference: String,
     val verseText: String, // Or just save the reference if text isn't needed, but text is nice
     val timestamp: Long = System.currentTimeMillis()

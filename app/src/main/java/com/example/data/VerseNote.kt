@@ -7,6 +7,8 @@ import androidx.room.PrimaryKey
 data class VerseNote(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val sectionId: String,
+    /** Null means this note predates translation identity and was not safely inferable. */
+    val bibleId: String? = null,
     val verseReference: String,
     val noteText: String,
     val timestamp: Long = System.currentTimeMillis()

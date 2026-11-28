@@ -8,8 +8,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface VerseNoteDao {
-    @Query("SELECT * FROM verse_notes WHERE sectionId = :sectionId ORDER BY timestamp DESC")
-    fun getNotesForSection(sectionId: String): Flow<List<VerseNote>>
+    @Query("SELECT * FROM verse_notes WHERE sectionId = :sectionId AND bibleId = :bibleId ORDER BY timestamp DESC")
+    fun getNotesForSection(sectionId: String, bibleId: String): Flow<List<VerseNote>>
+
+    @Query("SELECT * FROM verse_notes WHERE sectionId = :sectionId AND bibleId IS NULL ORDER BY timestamp DESC")
+    fun getLegacyNotesForSection(sectionId: String): Flow<List<VerseNote>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: VerseNote)

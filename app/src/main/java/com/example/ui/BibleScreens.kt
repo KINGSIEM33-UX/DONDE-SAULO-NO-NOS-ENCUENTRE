@@ -329,7 +329,7 @@ fun BibleReaderScreen(
     var isSearchLoading by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
 
-    val chapterNotes by viewModel.getNotesForChapter(targetChapterId).collectAsStateWithLifecycle(initialValue = emptyList())
+    val chapterNotes by viewModel.getNotesForChapter(targetChapterId, currentBibleId).collectAsStateWithLifecycle(initialValue = emptyList())
     val rawChapterExplanation by viewModel.rawChapterExplanation.collectAsStateWithLifecycle()
     val isGeneratingRawExplanation by viewModel.isGeneratingRawExplanation.collectAsStateWithLifecycle()
 
@@ -626,7 +626,7 @@ fun BibleReaderScreen(
                         // Verses List (tappable for Favorite / Note / Share)
                         items(chapter.verses, key = { it.number }) { verse ->
                             val verseRef = "${chapter.reference}:${verse.number}"
-                            val isFav = favoriteVerses.any { it.verseReference == verseRef }
+                            val isFav = favoriteVerses.any { it.verseReference == verseRef && it.bibleId == currentBibleId }
                             val matchesChapterFilter = !isSearchActive ||
                                 searchQuery.isBlank() ||
                                 verse.text.contains(searchQuery, ignoreCase = true)
@@ -660,11 +660,11 @@ fun BibleReaderScreen(
                                         PulseHeartButton(
                                             liked = isFav,
                                             onToggle = {
-                                                val existing = favoriteVerses.firstOrNull { it.verseReference == verseRef }
+                                                val existing = favoriteVerses.firstOrNull { it.verseReference == verseRef && it.bibleId == currentBibleId }
                                                 if (existing != null) {
                                                     viewModel.deleteFavoriteVerse(existing.id)
                                                 } else {
-                                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text)
+                                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text, currentBibleId)
                                                 }
                                             },
                                             activeColor = Color(0xFFB91C1C),
@@ -757,7 +757,7 @@ fun BibleReaderScreen(
     selectedVerseForActions?.let { verse ->
         val chapterRef = resolvedChapter?.reference ?: targetChapterId
         val verseRef = "$chapterRef:${verse.number}"
-        val existingFav = favoriteVerses.firstOrNull { it.verseReference == verseRef }
+        val existingFav = favoriteVerses.firstOrNull { it.verseReference == verseRef && it.bibleId == currentBibleId }
 
         AlertDialog(
             onDismissRequest = { selectedVerseForActions = null },
@@ -772,7 +772,7 @@ fun BibleReaderScreen(
                                     viewModel.deleteFavoriteVerse(existingFav.id)
                                     Toast.makeText(context, "Eliminado de favoritos", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text)
+                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text, currentBibleId)
                                     Toast.makeText(context, "Guardado en Favoritos ❤️", Toast.LENGTH_SHORT).show()
                                 }
                                 selectedVerseForActions = null
@@ -852,6 +852,7 @@ fun BibleReaderScreen(
                         if (noteTextInput.isNotBlank()) {
                             viewModel.saveVerseNote(
                                 sectionId = targetChapterId,
+                                bibleId = currentBibleId,
                                 verseRef = noteVerseInput.ifBlank { resolvedChapter?.reference ?: targetChapterId },
                                 note = noteTextInput
                             )
