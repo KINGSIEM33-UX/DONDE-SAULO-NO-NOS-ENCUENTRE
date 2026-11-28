@@ -30,11 +30,45 @@ service cloud.firestore {
              (listVal.size() <= 1 || (listVal[listVal.size() - 1] is string && listVal[listVal.size() - 1].size() <= 500));
     }
 
+    function isPersonalGroupId(groupId) {
+      return groupId is string &&
+             groupId.size() >= 9 &&
+             groupId[0:9] == 'personal_';
+    }
+
+    function isDirectPersonalUid(uid) {
+      return uid is string &&
+             uid.size() >= 1 &&
+             uid.size() <= 119 &&
+             uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+             !(uid.size() >= 7 && uid[0:7] == 'sha256_');
+    }
+
+    function personalScopeId(uid) {
+      return isDirectPersonalUid(uid)
+        ? ('personal_' + uid)
+        : ('personal_sha256_' + hashing.sha256(uid.toUtf8()).toHexString().lower());
+    }
+
+    function isPersonalScope(groupId) {
+      return isSignedIn() &&
+             request.auth.uid is string &&
+             request.auth.uid.size() >= 1 &&
+             request.auth.uid.size() <= 128 &&
+             groupId is string &&
+             groupId == personalScopeId(request.auth.uid);
+    }
+
     function isGroupMember(groupId) {
       return isSignedIn() &&
              isValidId(groupId) &&
+             !isPersonalGroupId(groupId) &&
              exists(/databases/$(database)/documents/groups/$(groupId)) &&
              request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+    }
+
+    function isPrivateStoryWithoutGroup(data) {
+      return !('groupId' in data) || data.groupId == '';
     }
 
     // 0. SocialGroup Validation Blueprint
@@ -184,7 +218,8 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidId(outingId) &&
                        isValidOuting(incoming()) &&
-                       incoming().ownerId == request.auth.uid;
+                       incoming().ownerId == request.auth.uid &&
+                       (isPersonalScope(incoming().groupId) || isGroupMember(incoming().groupId));
 
       allow update: if isSignedIn() &&
                        isValidId(outingId) &&
@@ -192,6 +227,13 @@ service cloud.firestore {
                        (existing().ownerId == request.auth.uid || isGroupMember(existing().groupId)) &&
                        incoming().ownerId == existing().ownerId &&
                        incoming().createdAt == existing().createdAt &&
+                       (
+                         incoming().groupId == existing().groupId ||
+                         (
+                           existing().ownerId == request.auth.uid &&
+                           (isPersonalScope(incoming().groupId) || isGroupMember(incoming().groupId))
+                         )
+                       ) &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'groupId', 'title', 'location', 'meetingPoint',
                          'dateIso', 'time', 'status', 'budgetPerPerson', 'kitItems',
@@ -239,7 +281,8 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
-                       incoming().senderId == request.auth.uid;
+                       incoming().senderId == request.auth.uid &&
+                       (isPersonalScope(incoming().groupId) || isGroupMember(incoming().groupId));
 
       allow update: if isSignedIn() &&
                        isValidId(messageId) &&
@@ -287,7 +330,17 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
                        isValidId(storyId) &&
                        isValidStory(incoming()) &&
-                       incoming().authorId == request.auth.uid;
+                       incoming().authorId == request.auth.uid &&
+                       (
+                         isPrivateStoryWithoutGroup(incoming()) ||
+                         (
+                           'groupId' in incoming() &&
+                           (
+                             isPersonalScope(incoming().groupId) ||
+                             (incoming().groupId.size() > 0 && isGroupMember(incoming().groupId))
+                           )
+                         )
+                       );
 
       allow update: if isSignedIn() &&
                        isValidId(storyId) &&
