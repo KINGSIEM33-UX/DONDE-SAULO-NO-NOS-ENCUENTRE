@@ -16,7 +16,7 @@ const BOB_UID = "bob_456";
 const CAROL_UID = "carol_789";
 const EVE_UID = "eve_attacker";
 
-const HIGH_ENTROPY_GROUP_ID = "grp_K7M9P2Q4R6T8V3W5X7Y9Z2A4B6";
+const HIGH_ENTROPY_GROUP_ID = "v2_grp_K7M9P2Q4R6T8V3W5X7Y9Z2A4B6";
 const TOKEN_SINGLE = "INV-A2B3C4D5-E6F7G8H9-J2K3L4M5-N6P7Q8R9";
 const TOKEN_MULTI = "INV-M2N3P4Q5-R6S7T8U9-V2W3X4Y5-Z6A7B8C9";
 const TOKEN_REVOKED = "INV-R2E3V4O5-K6E7D8T9-O2K3E4N5-X6Y7Z8A9";
@@ -83,6 +83,12 @@ function validOutingPayload(ownerId, groupId, ts) {
 async function createV2GroupAtomically(db, groupId, ownerUid, ownerName, groupName = "Grupo Seguro") {
   const now = new Date();
   const batch = db.batch();
+  batch.set(db.collection("groups_id_registry").doc(groupId), {
+    groupId,
+    createdBy: ownerUid,
+    schemaVersion: 2,
+    createdAt: now,
+  });
   batch.set(db.collection("groups").doc(groupId), {
     name: groupName,
     createdBy: ownerUid,
@@ -256,7 +262,7 @@ test("Forged, wrong-group, short, revoked, expired, and reused single-use tokens
   const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
 
   await assertSucceeds(createV2GroupAtomically(aliceDb, HIGH_ENTROPY_GROUP_ID, ALICE_UID, "Alice"));
-  const otherGroupId = "grp_OTHER9P2Q4R6T8V3W5X7Y9Z2A4";
+  const otherGroupId = "v2_grp_OTHER9P2Q4R6T8V3W5X7Y9Z2A4";
   await assertSucceeds(createV2GroupAtomically(carolDb, otherGroupId, CAROL_UID, "Carol", "Otro Grupo"));
 
   // 1. Short/low-entropy token rejected even by owner
@@ -655,4 +661,82 @@ test("Legacy group (QUEDA-2026): preserves existing members & outings, closes se
   await assertFails(
     carolDb.collection("outings").where("groupId", "==", "QUEDA-2026").get()
   );
+});
+
+// --- ALTO-4 v2 namespace + immutable registry adversarial tests ---
+test("ALTO-4: v2 creation requires one atomic registry + group + OWNER batch; legacy IDs fail closed", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const v2Id = "v2_grp_ATOMIC7P4R6T8V3W5X7Y9Z2A4B6";
+  const legacyId = "QUEDA-9999";
+  const now = new Date();
+  const groupPayload = {
+    name: "Atómico", createdBy: ALICE_UID, schemaVersion: 2,
+    createdAt: now, updatedAt: now,
+  };
+  const ownerPayload = {
+    userId: ALICE_UID, groupId: v2Id, displayName: "Alice", role: "OWNER",
+    inviteToken: "", joinedAt: now, updatedAt: now,
+  };
+
+  await assertFails(aliceDb.collection("groups").doc(v2Id).set(groupPayload));
+  await assertFails(aliceDb.collection("groups_id_registry").doc(v2Id).set({
+    groupId: v2Id, createdBy: ALICE_UID, schemaVersion: 2, createdAt: now,
+  }));
+  await assertFails(aliceDb.collection("groups").doc(legacyId).set({
+    name: "Legacy nuevo", createdBy: ALICE_UID, schemaVersion: 2,
+    createdAt: now, updatedAt: now,
+  }));
+
+  const batch = aliceDb.batch();
+  batch.set(aliceDb.collection("groups_id_registry").doc(v2Id), {
+    groupId: v2Id, createdBy: ALICE_UID, schemaVersion: 2, createdAt: now,
+  });
+  batch.set(aliceDb.collection("groups").doc(v2Id), groupPayload);
+  batch.set(aliceDb.collection("groups").doc(v2Id).collection("members").doc(ALICE_UID), ownerPayload);
+  await assertSucceeds(batch.commit());
+});
+
+test("ALTO-4: registry cannot be forged, read, listed, updated, deleted, or bypassed by a batch", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const v2Id = "v2_grp_REGISTRY7P4R6T8V3W5X7Y9Z2A4B6";
+  await assertSucceeds(createV2GroupAtomically(aliceDb, v2Id, ALICE_UID, "Alice"));
+  const registry = aliceDb.collection("groups_id_registry").doc(v2Id);
+
+  await assertFails(eveDb.collection("groups_id_registry").doc(v2Id).get());
+  await assertFails(eveDb.collection("groups_id_registry").get());
+  await assertFails(eveDb.collection("groups_id_registry").doc(v2Id).set({
+    groupId: v2Id, createdBy: EVE_UID, schemaVersion: 2, createdAt: new Date(),
+  }));
+  await assertFails(aliceDb.collection("groups_id_registry").doc(v2Id).update({ createdBy: EVE_UID }));
+  await assertFails(aliceDb.collection("groups_id_registry").doc(v2Id).delete());
+
+  // A batch cannot create a registry entry for a missing group or spoof its owner.
+  const orphanId = "v2_grp_ORPHAN7P4R6T8V3W5X7Y9Z2A4B6";
+  const orphanBatch = eveDb.batch();
+  orphanBatch.set(eveDb.collection("groups_id_registry").doc(orphanId), {
+    groupId: orphanId, createdBy: EVE_UID, schemaVersion: 2, createdAt: new Date(),
+  });
+  await assertFails(orphanBatch.commit());
+  assert.ok(registry.path.endsWith(v2Id));
+});
+
+test("ALTO-4: delete/recreate is permanently blocked by the tombstone, including simultaneous attempts", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const v2Id = "v2_grp_TOMBSTONE7P4R6T8V3W5X7Y9Z2A4B6";
+  await assertSucceeds(createV2GroupAtomically(aliceDb, v2Id, ALICE_UID, "Alice"));
+  await assertFails(aliceDb.collection("groups").doc(v2Id).delete());
+
+  // Even if a privileged migration removes the parent, the client cannot reuse the ID.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("groups").doc(v2Id).delete();
+  });
+  const results = await Promise.allSettled([
+    createV2GroupAtomically(aliceDb, v2Id, ALICE_UID, "Alice otra"),
+    createV2GroupAtomically(eveDb, v2Id, EVE_UID, "Eve"),
+  ]);
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 0);
+  assert.equal(results.filter((r) => r.status === "rejected").length, 2);
+  await assertFails(aliceDb.collection("groups_id_registry").doc(v2Id).delete());
 });

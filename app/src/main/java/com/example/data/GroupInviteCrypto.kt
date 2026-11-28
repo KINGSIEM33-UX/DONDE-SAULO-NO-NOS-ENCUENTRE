@@ -8,13 +8,13 @@ import java.security.SecureRandom
  *
  * Entropy design:
  * - Alphabet: 32 unambiguous Base32 characters (5 bits per character; omits 0, 1, I, O).
- * - Group ID: "grp_" + 26 Base32 chars = 130 bits of entropy (decoupled from invites).
+ * - Group ID: "v2_grp_" + 26 Base32 chars = 130 bits of entropy (decoupled from invites).
  * - Invite Token: "INV-" + 4 groups of 8 Base32 chars (32 chars total) = 160 bits of entropy.
  */
 object GroupInviteCrypto {
 
     private const val ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    private const val GROUP_ID_PREFIX = "grp_"
+    private const val GROUP_ID_PREFIX = "v2_grp_"
     private const val GROUP_ID_RANDOM_CHARS = 26 // 130 bits
     private const val INVITE_PREFIX = "INV-"
     private const val INVITE_RANDOM_CHARS = 32   // 160 bits

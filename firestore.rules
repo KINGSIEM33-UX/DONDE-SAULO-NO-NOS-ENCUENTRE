@@ -15,6 +15,23 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // New group generations use a logical v2 namespace. Legacy IDs (for example
+    // QUEDA-2026) remain readable/migratable but cannot be created through this
+    // client surface. Entropy is an enumeration defence, not authentication.
+    function isV2GroupId(id) {
+      return isValidId(id) && id.matches('^v2_[a-zA-Z0-9_\\-]{20,120}$');
+    }
+
+    function isValidGroupRegistry(data, registryId) {
+      return data.keys().hasAll(['groupId', 'createdBy', 'schemaVersion', 'createdAt']) &&
+             data.keys().hasOnly(['groupId', 'createdBy', 'schemaVersion', 'createdAt']) &&
+             isV2GroupId(registryId) &&
+             data.groupId == registryId &&
+             data.createdBy is string && data.createdBy == request.auth.uid &&
+             data.schemaVersion == 2 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
     // High-entropy invite tokens: minimum 24 chars, INV- prefix, Base32/alphanumeric + dashes
     function isValidInviteTokenId(token) {
       return token is string &&
@@ -122,6 +139,22 @@ service cloud.firestore {
       );
     }
 
+    // A registry entry is an immutable tombstone. It is intentionally not readable
+    // or listable by clients: existence is only used as a write-time guard.
+    match /groups_id_registry/{registryId} {
+      allow get, list: if false;
+      allow create: if isSignedIn() &&
+                       isValidGroupRegistry(incoming(), registryId) &&
+                       !exists(/databases/$(database)/documents/groups/$(registryId)) &&
+                       existsAfter(/databases/$(database)/documents/groups/$(registryId)) &&
+                       getAfter(/databases/$(database)/documents/groups/$(registryId)).data.schemaVersion == 2 &&
+                       getAfter(/databases/$(database)/documents/groups/$(registryId)).data.createdBy == request.auth.uid &&
+                       getAfter(/databases/$(database)/documents/groups/$(registryId)).data.createdAt == incoming().createdAt &&
+                       existsAfter(/databases/$(database)/documents/groups/$(registryId)/members/$(request.auth.uid)) &&
+                       getAfter(/databases/$(database)/documents/groups/$(registryId)/members/$(request.auth.uid)).data.role == 'OWNER';
+      allow update, delete: if false;
+    }
+
     // 0A. SocialGroup Validation Blueprint (v2 decoupled from invite tokens & member arrays)
     function isValidV2Group(data) {
       return data.keys().hasAll(['name', 'createdBy', 'schemaVersion', 'createdAt', 'updatedAt']) &&
@@ -197,11 +230,19 @@ service cloud.firestore {
         hasV2MemberDoc(groupId, request.auth.uid)
       );
 
-      // New groups must use v2 schema and atomically create the creator's OWNER member doc.
+      // New groups must use the v2 namespace, an unused registry slot, and an
+      // atomic registry + group + OWNER-member creation. The old /groups/{legacyId}
+      // creation route is deliberately closed; legacy records require migration.
       allow create: if isSignedIn() &&
-                       isValidId(groupId) &&
+                       isV2GroupId(groupId) &&
                        isValidV2Group(incoming()) &&
                        incoming().createdBy == request.auth.uid &&
+                       !exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                       !exists(/databases/$(database)/documents/groups_id_registry/$(groupId)) &&
+                       existsAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)) &&
+                       getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.groupId == groupId &&
+                       getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.createdBy == request.auth.uid &&
+                       getAfter(/databases/$(database)/documents/groups_id_registry/$(groupId)).data.createdAt == incoming().createdAt &&
                        existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)) &&
                        getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.role == 'OWNER';
 

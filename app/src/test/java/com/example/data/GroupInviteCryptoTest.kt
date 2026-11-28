@@ -10,9 +10,9 @@ class GroupInviteCryptoTest {
         val ids = (1..50).map { GroupInviteCrypto.generateHighEntropyGroupId() }.toSet()
         assertThat(ids).hasSize(50)
         ids.forEach { id ->
-            assertThat(id).startsWith("grp_")
-            assertThat(id.length).isEqualTo(30) // "grp_" + 26 Base32 chars (130 bits)
-            assertThat(id).matches("^grp_[A-HJ-NP-Z2-9]{26}$")
+            assertThat(id).startsWith("v2_grp_")
+            assertThat(id.length).isEqualTo(33) // "v2_grp_" + 26 Base32 chars (130 bits)
+            assertThat(id).matches("^v2_grp_[A-HJ-NP-Z2-9]{26}$")
             assertThat(GroupInviteCrypto.isHighEntropyInviteToken(id)).isFalse()
         }
     }

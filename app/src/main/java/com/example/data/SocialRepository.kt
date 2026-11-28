@@ -67,7 +67,8 @@ class SocialRepository(
 
     /**
      * Atomically creates a schema v2 group with a 130-bit random groupId (decoupled from invites)
-     * and initializes the creator's OWNER document in /groups/{groupId}/members/{creatorUid}.
+     * and initializes an immutable registry tombstone plus the creator's OWNER
+     * document in /groups/{groupId}/members/{creatorUid}, all in one batch.
      */
     suspend fun createGroupAtomic(
         groupName: String,
@@ -77,6 +78,7 @@ class SocialRepository(
         val cleanName = groupName.trim().take(80).ifBlank { "Grupo de Salidas" }
         val groupId = GroupInviteCrypto.generateHighEntropyGroupId()
         val groupRef = db.collection(GROUPS_COLLECTION).document(groupId)
+        val registryRef = db.collection(GROUP_ID_REGISTRY_COLLECTION).document(groupId)
         val ownerMemberRef = groupRef.collection(MEMBERS_SUBCOLLECTION).document(creatorUid)
         try {
             val group = SocialGroup(
@@ -86,6 +88,12 @@ class SocialRepository(
                 schemaVersion = 2L
             )
             val batch = db.batch()
+            batch.set(registryRef, mapOf(
+                "groupId" to groupId,
+                "createdBy" to creatorUid,
+                "schemaVersion" to 2L,
+                "createdAt" to FieldValue.serverTimestamp()
+            ))
             batch.set(groupRef, group.toV2CreateMap(creatorUid))
             batch.set(ownerMemberRef, GroupMember.toOwnerCreateMap(creatorUid, groupId, creatorName))
             batch.commit().await()
@@ -651,6 +659,7 @@ class SocialRepository(
 
     companion object {
         const val GROUPS_COLLECTION = "groups"
+        const val GROUP_ID_REGISTRY_COLLECTION = "groups_id_registry"
         const val MEMBERS_SUBCOLLECTION = "members"
         const val GROUP_INVITES_COLLECTION = "group_invites"
         const val USERS_COLLECTION = "users"
