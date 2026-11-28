@@ -15,6 +15,14 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // High-entropy invite tokens: minimum 24 chars, INV- prefix, Base32/alphanumeric + dashes
+    function isValidInviteTokenId(token) {
+      return token is string &&
+             token.size() >= 24 &&
+             token.size() <= 64 &&
+             token.matches('^INV-[A-Z0-9_\\-]{20,60}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -30,20 +38,64 @@ service cloud.firestore {
              (listVal.size() <= 1 || (listVal[listVal.size() - 1] is string && listVal[listVal.size() - 1].size() <= 500));
     }
 
-    function isGroupMember(groupId) {
-      return isSignedIn() &&
-             isValidId(groupId) &&
-             exists(/databases/$(database)/documents/groups/$(groupId)) &&
-             request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+    // --- Group Membership & Role Helpers (v2 Subcollection + Legacy v1 Read Fallback) ---
+    function hasV2MemberDoc(groupId, uid) {
+      return isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)/members/$(uid));
     }
 
-    // 0. SocialGroup Validation Blueprint
-    function isValidGroup(data) {
+    function v2MemberRole(groupId, uid) {
+      return get(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data.role;
+    }
+
+    function isLegacyGroupMember(groupId, uid) {
+      return isValidId(groupId) &&
+             exists(/databases/$(database)/documents/groups/$(groupId)) &&
+             'memberIds' in get(/databases/$(database)/documents/groups/$(groupId)).data &&
+             get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds is list &&
+             uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds;
+    }
+
+    function isGroupMember(groupId) {
+      return isSignedIn() && (
+        hasV2MemberDoc(groupId, request.auth.uid) ||
+        isLegacyGroupMember(groupId, request.auth.uid)
+      );
+    }
+
+    function isGroupOwner(groupId) {
+      return isSignedIn() && isValidId(groupId) && (
+        (hasV2MemberDoc(groupId, request.auth.uid) && v2MemberRole(groupId, request.auth.uid) == 'OWNER') ||
+        (exists(/databases/$(database)/documents/groups/$(groupId)) &&
+         get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid)
+      );
+    }
+
+    function isGroupAdminOrOwner(groupId) {
+      return isSignedIn() && isValidId(groupId) && (
+        isGroupOwner(groupId) ||
+        (hasV2MemberDoc(groupId, request.auth.uid) && v2MemberRole(groupId, request.auth.uid) in ['OWNER', 'ADMIN'])
+      );
+    }
+
+    // 0A. SocialGroup Validation Blueprint (v2 decoupled from invite tokens & member arrays)
+    function isValidV2Group(data) {
+      return data.keys().hasAll(['name', 'createdBy', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['name', 'createdBy', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             data.schemaVersion == 2 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Legacy v1 group schema validation (allowed ONLY for owner maintenance/pruning on existing docs)
+    function isValidLegacyGroup(data) {
       return data.keys().hasAll([
                'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt'
              ]) &&
              data.keys().hasOnly([
-               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt'
+               'name', 'inviteCode', 'createdBy', 'memberIds', 'memberNames', 'createdAt', 'updatedAt', 'schemaVersion'
              ]) &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.inviteCode is string && data.inviteCode.size() >= 1 && data.inviteCode.size() <= 32 &&
@@ -54,35 +106,242 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
-    match /groups/{groupId} {
-      // Any signed-in user can look up a group by invite code to join it
-      allow get: if isSignedIn() && isValidId(groupId);
-      allow list: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+    // 0B. Per-Member Document Validation (/groups/{groupId}/members/{memberUid})
+    function isValidGroupMember(data, groupId, memberUid) {
+      return data.keys().hasAll(['userId', 'groupId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
+             data.keys().hasOnly(['userId', 'groupId', 'displayName', 'role', 'inviteToken', 'joinedAt', 'updatedAt']) &&
+             data.userId is string && data.userId == memberUid &&
+             data.groupId is string && data.groupId == groupId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.role is string && data.role in ['OWNER', 'ADMIN', 'MEMBER'] &&
+             data.inviteToken is string && data.inviteToken.size() <= 64 &&
+             data.joinedAt is timestamp && data.joinedAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
 
+    // 0C. High-Entropy Revocable Invite Validation (/group_invites/{token})
+    function isValidGroupInvite(data, tokenId) {
+      return data.keys().hasAll([
+               'token', 'groupId', 'groupNamePreview', 'createdBy',
+               'revoked', 'expiresAt', 'maxUses', 'useCount',
+               'lastRedeemedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'token', 'groupId', 'groupNamePreview', 'createdBy',
+               'revoked', 'expiresAt', 'maxUses', 'useCount',
+               'lastRedeemedBy', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidInviteTokenId(tokenId) &&
+             data.token is string && data.token == tokenId &&
+             isValidId(data.groupId) &&
+             data.groupNamePreview is string && data.groupNamePreview.size() >= 1 && data.groupNamePreview.size() <= 80 &&
+             data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+             data.revoked is bool &&
+             data.expiresAt is timestamp &&
+             data.maxUses is int && data.maxUses >= 1 && data.maxUses <= 100 &&
+             data.useCount is int && data.useCount >= 0 && data.useCount <= data.maxUses &&
+             data.lastRedeemedBy is string && data.lastRedeemedBy.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /groups/{groupId} {
+      // Strictly members-only: knowing groupId leaks ZERO private group data to non-members.
+      allow get: if isGroupMember(groupId);
+      allow list: if isSignedIn() && (
+        ('memberIds' in resource.data && request.auth.uid in resource.data.memberIds) ||
+        hasV2MemberDoc(groupId, request.auth.uid)
+      );
+
+      // New groups must use v2 schema and atomically create the creator's OWNER member doc.
       allow create: if isSignedIn() &&
                        isValidId(groupId) &&
-                       isValidGroup(incoming()) &&
+                       isValidV2Group(incoming()) &&
                        incoming().createdBy == request.auth.uid &&
-                       request.auth.uid in incoming().memberIds;
+                       existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)) &&
+                       getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data.role == 'OWNER';
 
-      // Members can update group info; signed-in users with the code can join by adding themselves
+      // Closed self-join door: nobody can self-join or add third parties via /groups/{groupId} update.
+      // Only OWNER/ADMIN can rename; only OWNER can prune legacy memberIds (strict subset, never adding UIDs).
       allow update: if isSignedIn() &&
                        isValidId(groupId) &&
-                       isValidGroup(incoming()) &&
                        incoming().createdBy == existing().createdBy &&
-                       incoming().inviteCode == existing().inviteCode &&
                        incoming().createdAt == existing().createdAt &&
                        (
-                         request.auth.uid in existing().memberIds ||
                          (
-                           request.auth.uid in incoming().memberIds &&
-                           incoming().memberIds.hasAll(existing().memberIds) &&
-                           incoming().memberIds.size() <= existing().memberIds.size() + 1 &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt'])
+                           isValidV2Group(incoming()) &&
+                           isGroupAdminOrOwner(groupId) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])
+                         ) ||
+                         (
+                           isValidLegacyGroup(incoming()) &&
+                           incoming().inviteCode == existing().inviteCode &&
+                           (
+                             (isGroupAdminOrOwner(groupId) &&
+                              incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt'])) ||
+                             (isGroupOwner(groupId) &&
+                              existing().memberIds.hasAll(incoming().memberIds) &&
+                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'memberNames', 'updatedAt']))
+                           )
                          )
                        );
 
-      allow delete: if isSignedIn() && isValidId(groupId) && existing().createdBy == request.auth.uid;
+      allow delete: if isGroupOwner(groupId);
+
+      // Per-member subcollection: eliminates concurrent join races & arbitrary member tampering
+      match /members/{memberUid} {
+        // A signed-in user may check their own member doc (for atomic idempotent join);
+        // non-members get exists=false identically whether groupId exists or not (zero info leak).
+        // Reading other members or listing the subcollection strictly requires membership.
+        allow get: if isSignedIn() &&
+                      isValidId(groupId) &&
+                      isValidId(memberUid) &&
+                      (memberUid == request.auth.uid || isGroupMember(groupId));
+        allow list: if isGroupMember(groupId);
+
+        allow create: if isSignedIn() &&
+                         isValidId(groupId) &&
+                         isValidId(memberUid) &&
+                         memberUid == request.auth.uid &&
+                         isValidGroupMember(incoming(), groupId, memberUid) &&
+                         (
+                           // Case 1: Group creator initializing OWNER member doc in the same atomic batch as group creation
+                           (
+                             !exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                             existsAfter(/databases/$(database)/documents/groups/$(groupId)) &&
+                             getAfter(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid &&
+                             incoming().role == 'OWNER' &&
+                             incoming().inviteToken == ''
+                           ) ||
+                           // Case 2: Atomic invite redemption coupled via getAfter() with /group_invites/{token}
+                           (
+                             exists(/databases/$(database)/documents/groups/$(groupId)) &&
+                             incoming().role == 'MEMBER' &&
+                             isValidInviteTokenId(incoming().inviteToken) &&
+                             exists(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)) &&
+                             get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.groupId == groupId &&
+                             get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.revoked == false &&
+                             get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.expiresAt > request.time &&
+                             get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.useCount <
+                               get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.maxUses &&
+                             getAfter(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.useCount ==
+                               get(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.useCount + 1 &&
+                             getAfter(/databases/$(database)/documents/group_invites/$(incoming().inviteToken)).data.lastRedeemedBy == request.auth.uid
+                           ) ||
+                           // Case 3: Reversible self-backfill for ALREADY-EXISTING legacy memberIds members only
+                           (
+                             isLegacyGroupMember(groupId, request.auth.uid) &&
+                             incoming().inviteToken == '' &&
+                             incoming().role == (
+                               get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy == request.auth.uid
+                                 ? 'OWNER'
+                                 : 'MEMBER'
+                             )
+                           )
+                         );
+
+        allow update: if isSignedIn() &&
+                         isValidId(groupId) &&
+                         isValidId(memberUid) &&
+                         isValidGroupMember(incoming(), groupId, memberUid) &&
+                         incoming().userId == existing().userId &&
+                         incoming().groupId == existing().groupId &&
+                         incoming().inviteToken == existing().inviteToken &&
+                         incoming().joinedAt == existing().joinedAt &&
+                         (
+                           // Self-update: displayName only (cannot escalate own role)
+                           (
+                             memberUid == request.auth.uid &&
+                             isGroupMember(groupId) &&
+                             incoming().role == existing().role &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+                           ) ||
+                           // Owner role management: promote/demote MEMBER <-> ADMIN (cannot alter OWNER)
+                           (
+                             isGroupOwner(groupId) &&
+                             memberUid != request.auth.uid &&
+                             existing().role != 'OWNER' &&
+                             incoming().role in ['ADMIN', 'MEMBER'] &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])
+                           )
+                         );
+
+        allow delete: if isSignedIn() &&
+                         isValidId(groupId) &&
+                         isValidId(memberUid) &&
+                         existing().role != 'OWNER' &&
+                         (
+                           // Self leave (non-owner)
+                           memberUid == request.auth.uid ||
+                           // Owner can remove ADMIN or MEMBER; ADMIN can remove MEMBER only
+                           isGroupOwner(groupId) ||
+                           (isGroupAdminOrOwner(groupId) && existing().role == 'MEMBER')
+                         );
+      }
+    }
+
+    match /group_invites/{token} {
+      // Non-members can ONLY fetch an active, unrevoked, unexpired, unexhausted invite if they possess the 160-bit token ID.
+      // Revoked/expired/exhausted/non-existent invites are denied (prevents status oracle and stale preview leaks).
+      allow get: if isSignedIn() &&
+                    isValidInviteTokenId(token) &&
+                    resource != null &&
+                    (
+                      isGroupAdminOrOwner(resource.data.groupId) ||
+                      (
+                        resource.data.revoked == false &&
+                        resource.data.expiresAt > request.time &&
+                        resource.data.useCount < resource.data.maxUses
+                      )
+                    );
+
+      // Only OWNER/ADMIN of a group can list invites belonging to their group (zero global enumeration).
+      allow list: if isSignedIn() && isGroupAdminOrOwner(resource.data.groupId);
+
+      allow create: if isSignedIn() &&
+                       isValidGroupInvite(incoming(), token) &&
+                       isGroupAdminOrOwner(incoming().groupId) &&
+                       incoming().createdBy == request.auth.uid &&
+                       incoming().revoked == false &&
+                       incoming().useCount == 0 &&
+                       incoming().lastRedeemedBy == '' &&
+                       incoming().expiresAt > request.time;
+
+      allow update: if isSignedIn() &&
+                       isValidGroupInvite(incoming(), token) &&
+                       incoming().token == existing().token &&
+                       incoming().groupId == existing().groupId &&
+                       incoming().groupNamePreview == existing().groupNamePreview &&
+                       incoming().createdBy == existing().createdBy &&
+                       incoming().expiresAt == existing().expiresAt &&
+                       incoming().maxUses == existing().maxUses &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Case 1: OWNER/ADMIN revoking an invite
+                         (
+                           isGroupAdminOrOwner(existing().groupId) &&
+                           incoming().revoked == true &&
+                           incoming().useCount == existing().useCount &&
+                           incoming().lastRedeemedBy == existing().lastRedeemedBy &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['revoked', 'updatedAt'])
+                         ) ||
+                         // Case 2: Atomic redemption coupled with creating /groups/{groupId}/members/{uid}
+                         (
+                           existing().revoked == false &&
+                           incoming().revoked == false &&
+                           existing().expiresAt > request.time &&
+                           existing().useCount < existing().maxUses &&
+                           incoming().useCount == existing().useCount + 1 &&
+                           incoming().lastRedeemedBy == request.auth.uid &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['useCount', 'lastRedeemedBy', 'updatedAt']) &&
+                           !exists(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)) &&
+                           !isLegacyGroupMember(existing().groupId, request.auth.uid) &&
+                           existsAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)) &&
+                           getAfter(/databases/$(database)/documents/groups/$(existing().groupId)/members/$(request.auth.uid)).data.inviteToken == token
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isGroupAdminOrOwner(existing().groupId);
     }
 
     // 1. UserProfile Validation Blueprint
@@ -133,7 +392,7 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
     }
 
-    // 2. Outing Validation Blueprint
+    // 2. Outing Validation Blueprint (kept compatible with upcoming AI Studio content-creation rules)
     function isValidOuting(data) {
       return data.keys().hasAll([
                'ownerId', 'groupId', 'title', 'location', 'meetingPoint',

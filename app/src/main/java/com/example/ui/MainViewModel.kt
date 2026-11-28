@@ -14,6 +14,11 @@ import com.example.data.DataOrigin
 import com.example.data.FavoriteVerse
 import com.example.data.GeminiClient
 import com.example.data.GroupChatMessage
+import com.example.data.GroupInvite
+import com.example.data.GroupInviteCrypto
+import com.example.data.GroupMember
+import com.example.data.GroupRole
+import com.example.data.InviteRedemptionOutcome
 import com.example.data.NotificationHelper
 import com.example.data.Outing
 import com.example.data.OutingStatus
@@ -106,12 +111,19 @@ class MainViewModel(
     val userEmail = MutableStateFlow("")
     val authStatusMessage = MutableStateFlow<String?>(null)
     val activeSocialGroup = MutableStateFlow<SocialGroup?>(null)
+    val activeGroupMembers = MutableStateFlow<List<GroupMember>>(emptyList())
+    val activeGroupInvites = MutableStateFlow<List<GroupInvite>>(emptyList())
+    val currentGroupRole = MutableStateFlow<GroupRole?>(null)
+    val inviteActionFeedback = MutableStateFlow<String?>(null)
+    val isInviteActionBusy = MutableStateFlow(false)
     val socialSyncState = MutableStateFlow(SocialSyncSnapshot.forGuestDemo())
 
     private var currentAuthDisplayName: String? = null
     private var currentAuthPhotoUrl: String? = null
     private var profileJob: Job? = null
     private var groupJob: Job? = null
+    private var membersJob: Job? = null
+    private var invitesJob: Job? = null
     private var outingsJob: Job? = null
     private var chatJob: Job? = null
     private var storiesJob: Job? = null
@@ -570,6 +582,11 @@ class MainViewModel(
         stopCloudObservers()
         observedGroupId = null
         activeSocialGroup.value = null
+        activeGroupMembers.value = emptyList()
+        activeGroupInvites.value = emptyList()
+        currentGroupRole.value = null
+        inviteActionFeedback.value = null
+        isInviteActionBusy.value = false
         selectedOutingForDetail.value = null
 
         // Immediately discard all Guest Demo data so fictional items are never shown or written as real.
@@ -591,6 +608,11 @@ class MainViewModel(
     private fun enterGuestDemoMode() {
         stopCloudObservers()
         activeSocialGroup.value = null
+        activeGroupMembers.value = emptyList()
+        activeGroupInvites.value = emptyList()
+        currentGroupRole.value = GroupRole.OWNER
+        inviteActionFeedback.value = null
+        isInviteActionBusy.value = false
         observedGroupId = null
         selectedOutingForDetail.value = null
         userProfile.value = defaultGuestProfile
@@ -693,11 +715,19 @@ class MainViewModel(
         val repo = socialRepository ?: return
         observedGroupId = PERSONAL_SCOPE_SENTINEL
         groupJob?.cancel()
+        membersJob?.cancel()
+        invitesJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        groupJob = null
+        membersJob = null
+        invitesJob = null
 
         activeSocialGroup.value = null
+        activeGroupMembers.value = emptyList()
+        activeGroupInvites.value = emptyList()
+        currentGroupRole.value = null
         groupMembers.value = emptyList()
         socialSyncState.value = socialSyncState.value.copy(
             origin = DataOrigin.CLOUD_REAL,
@@ -767,9 +797,16 @@ class MainViewModel(
         val repo = socialRepository ?: return
         observedGroupId = groupId
         groupJob?.cancel()
+        membersJob?.cancel()
+        invitesJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
+        invitesJob = null
+
+        activeGroupMembers.value = emptyList()
+        activeGroupInvites.value = emptyList()
+        currentGroupRole.value = null
 
         socialSyncState.value = socialSyncState.value.copy(
             origin = DataOrigin.CLOUD_REAL,
@@ -794,18 +831,39 @@ class MainViewModel(
                 .collect { remoteGroup ->
                     activeSocialGroup.value = remoteGroup
                     if (remoteGroup != null) {
-                        val realMembers = remoteGroup.memberIds.map { memberUid ->
-                            val name = remoteGroup.memberNames[memberUid]?.ifBlank { "Miembro" } ?: "Miembro"
-                            if (memberUid == uid) "$name (Tú)" else name
-                        }
-                        groupMembers.value = realMembers
                         if (remoteGroup.name.isNotBlank() && userProfile.value.groupName != remoteGroup.name) {
                             userProfile.value = userProfile.value.copy(groupName = remoteGroup.name)
                         }
+                        refreshDerivedGroupState(uid, remoteGroup, activeGroupMembers.value)
+                        // Reversible self-backfill for ALREADY-EXISTING legacy memberIds members
+                        if (remoteGroup.memberIds.contains(uid) &&
+                            activeGroupMembers.value.none { it.userId == uid }
+                        ) {
+                            viewModelScope.launch {
+                                repo.backfillLegacyMembershipIfNeeded(
+                                    group = remoteGroup,
+                                    userId = uid,
+                                    displayName = userProfile.value.username.ifBlank { profile.username }
+                                )
+                            }
+                        }
                     } else {
                         groupMembers.value = emptyList()
+                        currentGroupRole.value = null
+                        ensureInvitesObserver(groupId, canManage = false)
                     }
                     socialSyncState.value = socialSyncState.value.copy(groupState = CloudLoadState.Loaded)
+                }
+        }
+
+        membersJob = viewModelScope.launch {
+            repo.observeGroupMembers(groupId)
+                .catch { e ->
+                    Log.w("MainViewModel", "Group members observer error: ${e.message}")
+                }
+                .collect { v2Members ->
+                    activeGroupMembers.value = v2Members
+                    refreshDerivedGroupState(uid, activeSocialGroup.value, v2Members)
                 }
         }
 
@@ -866,14 +924,80 @@ class MainViewModel(
         }
     }
 
+    private fun refreshDerivedGroupState(
+        uid: String,
+        group: SocialGroup?,
+        v2Members: List<GroupMember>
+    ) {
+        val merged = LinkedHashMap<String, Pair<String, GroupRole>>()
+        // First add authoritative v2 subcollection members
+        v2Members.forEach { member ->
+            merged[member.userId] = member.displayName.ifBlank { "Miembro" } to member.groupRole
+        }
+        // Merge any un-backfilled legacy memberIds so no legacy member disappears during transition
+        group?.memberIds?.forEach { legacyUid ->
+            if (!merged.containsKey(legacyUid)) {
+                val legacyName = group.memberNames[legacyUid]?.ifBlank { "Miembro" } ?: "Miembro"
+                val legacyRole = if (group.createdBy == legacyUid) GroupRole.OWNER else GroupRole.MEMBER
+                merged[legacyUid] = legacyName to legacyRole
+            }
+        }
+
+        groupMembers.value = merged.entries.map { (memberUid, pair) ->
+            val (name, role) = pair
+            val selfSuffix = if (memberUid == uid) " (Tú)" else ""
+            val roleSuffix = when (role) {
+                GroupRole.OWNER -> " · Propietario"
+                GroupRole.ADMIN -> " · Admin"
+                GroupRole.MEMBER -> ""
+            }
+            "$name$selfSuffix$roleSuffix"
+        }
+
+        val resolvedRole = merged[uid]?.second
+            ?: when {
+                group != null && group.createdBy == uid -> GroupRole.OWNER
+                else -> null
+            }
+        currentGroupRole.value = resolvedRole
+        val activeGid = group?.id?.ifBlank { observedGroupId.orEmpty() } ?: observedGroupId.orEmpty()
+        if (activeGid.isNotBlank() && activeGid != PERSONAL_SCOPE_SENTINEL) {
+            ensureInvitesObserver(activeGid, canManage = resolvedRole?.canManageInvites == true)
+        }
+    }
+
+    private fun ensureInvitesObserver(groupId: String, canManage: Boolean) {
+        val repo = socialRepository ?: return
+        if (!canManage) {
+            invitesJob?.cancel()
+            invitesJob = null
+            activeGroupInvites.value = emptyList()
+            return
+        }
+        if (invitesJob != null) return
+        invitesJob = viewModelScope.launch {
+            repo.observeGroupInvites(groupId)
+                .catch { e ->
+                    Log.w("MainViewModel", "Group invites observer error: ${e.message}")
+                }
+                .collect { invites ->
+                    activeGroupInvites.value = invites
+                }
+        }
+    }
+
     private fun stopCloudObservers() {
         profileJob?.cancel()
         groupJob?.cancel()
+        membersJob?.cancel()
+        invitesJob?.cancel()
         outingsJob?.cancel()
         chatJob?.cancel()
         storiesJob?.cancel()
         profileJob = null
         groupJob = null
+        membersJob = null
+        invitesJob = null
         outingsJob = null
         chatJob = null
         storiesJob = null
@@ -929,6 +1053,14 @@ class MainViewModel(
         )
         userProfile.value = updated
         persistProfileIfAuthenticated(updated)
+        val uid = currentUserId.value
+        val repo = socialRepository
+        val activeGid = SocialSessionPolicy.resolveTargetGroupId(updated)
+        if (uid != null && repo != null && activeGid.isNotBlank()) {
+            viewModelScope.launch {
+                repo.updateOwnMemberDisplayName(activeGid, uid, updated.username)
+            }
+        }
     }
 
     fun addCuriosity(item: String) {
@@ -951,77 +1083,260 @@ class MainViewModel(
         persistProfileIfAuthenticated(updated)
     }
 
+    fun clearInviteActionFeedback() {
+        inviteActionFeedback.value = null
+    }
+
     fun createNewOutingGroup(groupNameInput: String) {
         val cleanName = groupNameInput.trim().ifBlank { "Grupo de Salidas" }
-        val code = "QUEDA-" + (1000..9999).random()
-        val updated = userProfile.value.copy(
-            groupName = cleanName,
-            groupInviteCode = code,
-            groupId = code
-        )
-        userProfile.value = updated
-
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
+            isInviteActionBusy.value = true
+            inviteActionFeedback.value = "Creando grupo seguro en la nube…"
             viewModelScope.launch {
-                repo.createOrEnsureGroup(code, cleanName, uid, updated.username)
-                    .onSuccess {
-                        repo.saveUserProfile(updated, uid)
-                        startGroupScopedObservers(uid, code, updated)
-                        authStatusMessage.value = "Grupo '$cleanName' creado en la nube con código $code"
-                    }
-                    .onFailure { err ->
-                        authStatusMessage.value = "Error al crear grupo en la nube: ${err.localizedMessage}"
-                    }
+                repo.createGroupAtomic(
+                    groupName = cleanName,
+                    creatorUid = uid,
+                    creatorName = userProfile.value.username
+                ).onSuccess { createdGroup ->
+                    // groupInviteCode is intentionally empty: groupId is NEVER reused as an invite code.
+                    val updated = userProfile.value.copy(
+                        groupName = createdGroup.name,
+                        groupInviteCode = "",
+                        groupId = createdGroup.id
+                    )
+                    userProfile.value = updated
+                    repo.saveUserProfile(updated, uid)
+                    startGroupScopedObservers(uid, createdGroup.id, updated)
+                    val msg = "Grupo '${createdGroup.name}' creado. Genera una invitación revocable para añadir personas."
+                    inviteActionFeedback.value = msg
+                    authStatusMessage.value = msg
+                }.onFailure { err ->
+                    val msg = "No se pudo crear el grupo en la nube: ${err.localizedMessage ?: "error de red o permisos"}"
+                    inviteActionFeedback.value = msg
+                    authStatusMessage.value = msg
+                }
+                isInviteActionBusy.value = false
             }
         } else {
-            groupMembers.value = listOf("${updated.username} (Tú) 👑")
-            authStatusMessage.value = "Grupo '$cleanName' creado con código $code (modo local)"
+            val demoGroupId = "demo_local_group"
+            val updated = userProfile.value.copy(
+                groupName = cleanName,
+                groupInviteCode = "",
+                groupId = demoGroupId
+            )
+            userProfile.value = updated
+            currentGroupRole.value = GroupRole.OWNER
+            activeGroupInvites.value = emptyList()
+            groupMembers.value = listOf("${updated.username} (Tú) · Propietario")
+            val msg = "Grupo '$cleanName' creado solo en modo demo local (inicia sesión para sincronizar)."
+            inviteActionFeedback.value = msg
+            authStatusMessage.value = msg
+        }
+    }
+
+    fun generateGroupInvite(
+        maxUses: Int = 1,
+        expiresInHours: Int = 24,
+        onCreated: (GroupInvite) -> Unit = {}
+    ) {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        val activeGroupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value)
+        val groupName = activeSocialGroup.value?.name?.ifBlank { userProfile.value.groupName }
+            ?: userProfile.value.groupName.ifBlank { "Grupo" }
+
+        if (activeGroupId.isBlank()) {
+            inviteActionFeedback.value = "Primero crea o únete a un grupo para generar invitaciones."
+            return
+        }
+
+        if (uid != null && repo != null) {
+            if (currentGroupRole.value?.canManageInvites != true) {
+                inviteActionFeedback.value = "Solo el propietario o administradores pueden crear invitaciones."
+                return
+            }
+            isInviteActionBusy.value = true
+            inviteActionFeedback.value = "Generando invitación segura de 160 bits…"
+            viewModelScope.launch {
+                repo.createGroupInvite(
+                    groupId = activeGroupId,
+                    groupNamePreview = groupName,
+                    creatorUid = uid,
+                    maxUses = maxUses.toLong(),
+                    expiresInHours = expiresInHours.toLong()
+                ).onSuccess { invite ->
+                    val usesLabel = if (maxUses == 1) "1 uso" else "$maxUses usos"
+                    inviteActionFeedback.value = "Invitación creada ($usesLabel · ${expiresInHours}h). Compártela o revócala cuando quieras."
+                    onCreated(invite)
+                }.onFailure { err ->
+                    inviteActionFeedback.value = "No se pudo crear la invitación: ${err.localizedMessage ?: "sin permisos o sin conexión"}"
+                }
+                isInviteActionBusy.value = false
+            }
+        } else {
+            val demoToken = GroupInviteCrypto.generateHighEntropyInviteToken()
+            val demoInvite = GroupInvite(
+                token = demoToken,
+                groupId = activeGroupId,
+                groupNamePreview = groupName,
+                createdBy = SocialSessionPolicy.GUEST_DEMO_USER_ID,
+                revoked = false,
+                expiresAt = com.google.firebase.Timestamp(java.util.Date(System.currentTimeMillis() + expiresInHours * 3_600_000L)),
+                maxUses = maxUses.toLong(),
+                useCount = 0L
+            )
+            activeGroupInvites.value = listOf(demoInvite) + activeGroupInvites.value
+            inviteActionFeedback.value = "Invitación de demostración local creada (no sincronizada en la nube)."
+            onCreated(demoInvite)
+        }
+    }
+
+    fun revokeGroupInvite(token: String) {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        if (uid != null && repo != null) {
+            isInviteActionBusy.value = true
+            viewModelScope.launch {
+                repo.revokeGroupInvite(token)
+                    .onSuccess {
+                        inviteActionFeedback.value = "Invitación revocada. Ya no podrá usarse para entrar al grupo."
+                    }
+                    .onFailure { err ->
+                        inviteActionFeedback.value = "No se pudo revocar la invitación: ${err.localizedMessage ?: "error de permisos"}"
+                    }
+                isInviteActionBusy.value = false
+            }
+        } else {
+            activeGroupInvites.value = activeGroupInvites.value.map {
+                if (it.token == token) it.copy(revoked = true) else it
+            }
+            inviteActionFeedback.value = "Invitación local revocada."
         }
     }
 
     fun joinOutingGroupByCode(inviteCodeInput: String, groupNameHint: String = "") {
-        val cleanCode = inviteCodeInput.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "")
-        if (cleanCode.isBlank()) {
-            authStatusMessage.value = "Introduce un código de invitación válido"
+        val normalized = GroupInviteCrypto.normalizeInviteToken(inviteCodeInput)
+        if (normalized.isBlank()) {
+            val msg = "Pega un token de invitación válido (INV-…)."
+            inviteActionFeedback.value = msg
+            authStatusMessage.value = msg
             return
         }
+        if (GroupInviteCrypto.isLegacyGroupCode(inviteCodeInput)) {
+            val msg = "Los códigos antiguos de 4 dígitos (ej. QUEDA-2026) ya no permiten autounirse por seguridad. Pide al propietario del grupo una invitación nueva (INV-…)."
+            inviteActionFeedback.value = msg
+            authStatusMessage.value = msg
+            return
+        }
+
         val uid = currentUserId.value
         val repo = socialRepository
         if (uid != null && repo != null) {
+            isInviteActionBusy.value = true
+            inviteActionFeedback.value = "Validando invitación y uniéndote de forma atómica…"
             viewModelScope.launch {
-                repo.joinGroupByCode(
-                    inviteCode = cleanCode,
-                    userId = uid,
-                    displayName = userProfile.value.username,
-                    fallbackName = groupNameHint.trim()
-                ).onSuccess { joinedGroup ->
-                    val updated = userProfile.value.copy(
-                        groupId = joinedGroup.id,
-                        groupInviteCode = joinedGroup.inviteCode,
-                        groupName = joinedGroup.name
+                when (
+                    val outcome = repo.redeemInviteAndJoinGroupAtomic(
+                        rawTokenInput = inviteCodeInput,
+                        userId = uid,
+                        displayName = userProfile.value.username
                     )
-                    userProfile.value = updated
-                    repo.saveUserProfile(updated, uid)
-                    startGroupScopedObservers(uid, joinedGroup.id, updated)
-                    authStatusMessage.value = "¡Te has unido al grupo '${joinedGroup.name}' ($cleanCode)!"
-                }.onFailure { err ->
-                    authStatusMessage.value = "No se pudo unir al grupo $cleanCode: ${err.localizedMessage}"
+                ) {
+                    is InviteRedemptionOutcome.Joined -> {
+                        val updated = userProfile.value.copy(
+                            groupId = outcome.group.id,
+                            groupInviteCode = "",
+                            groupName = outcome.group.name.ifBlank { groupNameHint.ifBlank { "Grupo" } }
+                        )
+                        userProfile.value = updated
+                        repo.saveUserProfile(updated, uid)
+                        startGroupScopedObservers(uid, outcome.group.id, updated)
+                        val msg = if (outcome.alreadyMember) {
+                            "Ya perteneces a '${updated.groupName}' (no se consumió ningún uso adicional)."
+                        } else {
+                            "¡Te has unido a '${updated.groupName}'!"
+                        }
+                        inviteActionFeedback.value = msg
+                        authStatusMessage.value = msg
+                    }
+                    is InviteRedemptionOutcome.LegacyCodeUnsupported -> {
+                        val msg = "Los códigos antiguos (ej. QUEDA-2026) ya no admiten autounirse. Pide al propietario una invitación segura (INV-…)."
+                        inviteActionFeedback.value = msg
+                        authStatusMessage.value = msg
+                    }
+                    is InviteRedemptionOutcome.InvalidOrUnavailable -> {
+                        inviteActionFeedback.value = outcome.message
+                        authStatusMessage.value = outcome.message
+                    }
+                    is InviteRedemptionOutcome.Error -> {
+                        inviteActionFeedback.value = outcome.message
+                        authStatusMessage.value = outcome.message
+                    }
                 }
+                isInviteActionBusy.value = false
             }
         } else {
-            val displayGroup = groupNameHint.trim().ifBlank { "Grupo $cleanCode" }
+            if (!GroupInviteCrypto.isHighEntropyInviteToken(normalized)) {
+                val msg = "Formato de token no válido. Debe empezar por INV- y contener el código completo."
+                inviteActionFeedback.value = msg
+                authStatusMessage.value = msg
+                return
+            }
+            val displayGroup = groupNameHint.trim().ifBlank { "Grupo Demo" }
             val updated = userProfile.value.copy(
-                groupId = cleanCode,
-                groupInviteCode = cleanCode,
+                groupId = "demo_joined_group",
+                groupInviteCode = "",
                 groupName = displayGroup
             )
             userProfile.value = updated
-            if (!groupMembers.value.any { it.contains(cleanCode) }) {
-                groupMembers.value = groupMembers.value + "Miembro ($cleanCode) 🎉"
+            currentGroupRole.value = GroupRole.MEMBER
+            val msg = "Unión simulada solo en modo demo local. Inicia sesión con Google para unirte a un grupo real."
+            inviteActionFeedback.value = msg
+            authStatusMessage.value = msg
+        }
+    }
+
+    fun leaveCurrentGroup() {
+        val uid = currentUserId.value
+        val repo = socialRepository
+        val activeGroupId = SocialSessionPolicy.resolveTargetGroupId(userProfile.value)
+        if (activeGroupId.isBlank()) return
+
+        if (uid != null && repo != null) {
+            if (currentGroupRole.value == GroupRole.OWNER) {
+                inviteActionFeedback.value = "Eres el propietario del grupo; las reglas protegen la propiedad para evitar grupos huérfanos."
+                return
             }
-            authStatusMessage.value = "¡Te has unido al grupo con el código $cleanCode (modo local)!"
+            isInviteActionBusy.value = true
+            viewModelScope.launch {
+                repo.leaveGroup(activeGroupId, uid)
+                    .onSuccess {
+                        val updated = userProfile.value.copy(
+                            groupId = "",
+                            groupInviteCode = "",
+                            groupName = ""
+                        )
+                        userProfile.value = updated
+                        repo.saveUserProfile(updated, uid)
+                        startPersonalScopedObservers(uid)
+                        val msg = "Has salido del grupo correctamente."
+                        inviteActionFeedback.value = msg
+                        authStatusMessage.value = msg
+                    }
+                    .onFailure { err ->
+                        inviteActionFeedback.value = "No se pudo salir del grupo: ${err.localizedMessage ?: "error de permisos o conexión"}"
+                    }
+                isInviteActionBusy.value = false
+            }
+        } else {
+            val updated = userProfile.value.copy(groupId = "", groupInviteCode = "", groupName = "")
+            userProfile.value = updated
+            activeGroupInvites.value = emptyList()
+            groupMembers.value = emptyList()
+            currentGroupRole.value = null
+            inviteActionFeedback.value = "Has salido del grupo local (modo demo)."
         }
     }
 

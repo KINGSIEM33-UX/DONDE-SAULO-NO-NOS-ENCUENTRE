@@ -28,7 +28,7 @@ class SocialRepository(
         }
     }
 
-    // --- 0. Social Groups (Multi-user Collaboration) ---
+    // --- 0. Social Groups, Per-Member Subcollection & High-Entropy Invites ---
     fun observeGroup(groupId: String): Flow<SocialGroup?> {
         return db.collection(GROUPS_COLLECTION)
             .document(groupId)
@@ -42,95 +42,282 @@ class SocialRepository(
             }
     }
 
-    suspend fun createOrEnsureGroup(
-        groupId: String,
+    fun observeGroupMembers(groupId: String): Flow<List<GroupMember>> {
+        return db.collection(GROUPS_COLLECTION)
+            .document(groupId)
+            .collection(MEMBERS_SUBCOLLECTION)
+            .snapshots()
+            .map { snap ->
+                snap.toObjects(GroupMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedWith(compareBy<GroupMember> { it.groupRole.ordinal }.thenBy { it.displayName.lowercase() })
+            }
+    }
+
+    fun observeGroupInvites(groupId: String): Flow<List<GroupInvite>> {
+        return db.collection(GROUP_INVITES_COLLECTION)
+            .whereEqualTo("groupId", groupId)
+            .snapshots()
+            .map { snap ->
+                snap.toObjects(GroupInvite::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt?.seconds ?: 0L }
+            }
+    }
+
+    /**
+     * Atomically creates a schema v2 group with a 130-bit random groupId (decoupled from invites)
+     * and initializes the creator's OWNER document in /groups/{groupId}/members/{creatorUid}.
+     */
+    suspend fun createGroupAtomic(
         groupName: String,
         creatorUid: String = requireUserId(),
         creatorName: String
     ): Result<SocialGroup> = runCatching {
-        val cleanId = groupId.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "").take(32)
-            .ifBlank { "QUEDA-${(1000..9999).random()}" }
-        val docRef = db.collection(GROUPS_COLLECTION).document(cleanId)
+        val cleanName = groupName.trim().take(80).ifBlank { "Grupo de Salidas" }
+        val groupId = GroupInviteCrypto.generateHighEntropyGroupId()
+        val groupRef = db.collection(GROUPS_COLLECTION).document(groupId)
+        val ownerMemberRef = groupRef.collection(MEMBERS_SUBCOLLECTION).document(creatorUid)
         try {
-            val existing = docRef.get().await()
-            if (existing.exists()) {
-                val current = existing.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                if (current != null && !current.memberIds.contains(creatorUid)) {
-                    val newIds = (current.memberIds + creatorUid).distinct().take(50)
-                    val newNames = current.memberNames + (creatorUid to creatorName.take(60).ifBlank { "Usuario" })
-                    docRef.update(
-                        mapOf(
-                            "memberIds" to newIds,
-                            "memberNames" to newNames,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
-                    current.copy(memberIds = newIds, memberNames = newNames)
-                } else {
-                    current ?: SocialGroup(id = cleanId, name = groupName, inviteCode = cleanId, createdBy = creatorUid)
-                }
-            } else {
-                val group = SocialGroup(
-                    id = cleanId,
-                    name = groupName.take(80).ifBlank { "Grupo $cleanId" },
-                    inviteCode = cleanId,
-                    createdBy = creatorUid,
-                    memberIds = listOf(creatorUid),
-                    memberNames = mapOf(creatorUid to creatorName.take(60).ifBlank { "Usuario" })
-                )
-                docRef.set(group.toCreateMap(creatorUid, creatorName)).await()
-                group
-            }
+            val group = SocialGroup(
+                id = groupId,
+                name = cleanName,
+                createdBy = creatorUid,
+                schemaVersion = 2L
+            )
+            val batch = db.batch()
+            batch.set(groupRef, group.toV2CreateMap(creatorUid))
+            batch.set(ownerMemberRef, GroupMember.toOwnerCreateMap(creatorUid, groupId, creatorName))
+            batch.commit().await()
+            group
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            handleFirestoreError(e, OperationType.CREATE, groupRef.path)
             throw e
         }
     }
 
-    suspend fun joinGroupByCode(
-        inviteCode: String,
-        userId: String = requireUserId(),
-        displayName: String,
-        fallbackName: String = ""
-    ): Result<SocialGroup> = runCatching {
-        val cleanCode = inviteCode.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "").take(32)
-        require(cleanCode.isNotBlank()) { "El código de invitación no puede estar vacío" }
-        val docRef = db.collection(GROUPS_COLLECTION).document(cleanCode)
+    /**
+     * Creates a 160-bit high-entropy, revocable, expirable invite token in /group_invites/{token}.
+     * Only OWNER or ADMIN of the target group is permitted by firestore.rules.
+     */
+    suspend fun createGroupInvite(
+        groupId: String,
+        groupNamePreview: String,
+        creatorUid: String = requireUserId(),
+        maxUses: Long = 1L,
+        expiresInHours: Long = 24L
+    ): Result<GroupInvite> = runCatching {
+        val cleanGroupId = groupId.trim()
+        require(cleanGroupId.isNotBlank()) { "El grupo no es válido" }
+        val token = GroupInviteCrypto.generateHighEntropyInviteToken()
+        val safeMaxUses = maxUses.coerceIn(1L, 100L)
+        val safeHours = expiresInHours.coerceIn(1L, 24L * 30L)
+        val expiresAt = com.google.firebase.Timestamp(
+            java.util.Date(System.currentTimeMillis() + safeHours * 3_600_000L)
+        )
+        val inviteRef = db.collection(GROUP_INVITES_COLLECTION).document(token)
         try {
-            val snap = docRef.get().await()
-            if (!snap.exists()) {
-                // Create the group on-the-fly if user entered a brand-new shared code
-                val name = fallbackName.ifBlank { "Grupo $cleanCode" }
-                val group = SocialGroup(
-                    id = cleanCode,
-                    name = name,
-                    inviteCode = cleanCode,
-                    createdBy = userId,
-                    memberIds = listOf(userId),
-                    memberNames = mapOf(userId to displayName.take(60).ifBlank { "Usuario" })
+            inviteRef.set(
+                GroupInvite.toCreateMap(
+                    token = token,
+                    groupId = cleanGroupId,
+                    groupNamePreview = groupNamePreview,
+                    creatorUid = creatorUid,
+                    expiresAt = expiresAt,
+                    maxUses = safeMaxUses
                 )
-                docRef.set(group.toCreateMap(userId, displayName)).await()
-                group
-            } else {
-                val existing = snap.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    ?: throw IllegalStateException("Grupo inválido")
-                val updatedIds = (existing.memberIds + userId).distinct().take(50)
-                val updatedNames = existing.memberNames + (userId to displayName.take(60).ifBlank { "Usuario" })
-                docRef.update(
-                    mapOf(
-                        "memberIds" to updatedIds,
-                        "memberNames" to updatedNames,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-                existing.copy(memberIds = updatedIds, memberNames = updatedNames)
-            }
+            ).await()
+            GroupInvite(
+                id = token,
+                token = token,
+                groupId = cleanGroupId,
+                groupNamePreview = groupNamePreview.take(80).ifBlank { "Grupo" },
+                createdBy = creatorUid,
+                revoked = false,
+                expiresAt = expiresAt,
+                maxUses = safeMaxUses,
+                useCount = 0L
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            handleFirestoreError(e, OperationType.CREATE, inviteRef.path)
+            throw e
+        }
+    }
+
+    suspend fun revokeGroupInvite(token: String): Result<Unit> = runCatching {
+        val cleanToken = GroupInviteCrypto.normalizeInviteToken(token)
+        val inviteRef = db.collection(GROUP_INVITES_COLLECTION).document(cleanToken)
+        try {
+            inviteRef.update(
+                mapOf(
+                    "revoked" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, inviteRef.path)
+            throw e
+        }
+    }
+
+    /**
+     * Atomically and idempotently redeems a high-entropy invite token inside a single Firestore
+     * transaction: increments /group_invites/{token}.useCount by +1 and creates the user's own
+     * /groups/{groupId}/members/{userId} doc with role MEMBER. Prevents race conditions on
+     * concurrent joins and never consumes a use if the user is already a member.
+     */
+    suspend fun redeemInviteAndJoinGroupAtomic(
+        rawTokenInput: String,
+        userId: String = requireUserId(),
+        displayName: String
+    ): InviteRedemptionOutcome {
+        val normalized = GroupInviteCrypto.normalizeInviteToken(rawTokenInput)
+        if (normalized.isBlank()) {
+            return InviteRedemptionOutcome.InvalidOrUnavailable("Introduce un token o enlace de invitación válido.")
+        }
+        if (GroupInviteCrypto.isLegacyGroupCode(rawTokenInput)) {
+            return InviteRedemptionOutcome.LegacyCodeUnsupported
+        }
+        if (!GroupInviteCrypto.isHighEntropyInviteToken(normalized)) {
+            return InviteRedemptionOutcome.InvalidOrUnavailable(
+                "Formato de invitación no válido. Pega el token completo (INV-…)."
+            )
+        }
+
+        val inviteRef = db.collection(GROUP_INVITES_COLLECTION).document(normalized)
+        return try {
+            val (joinedGroupId, alreadyMember) = db.runTransaction { tx ->
+                val inviteSnap = tx.get(inviteRef)
+                if (!inviteSnap.exists()) {
+                    throw IllegalStateException("INVITE_UNAVAILABLE")
+                }
+                val invite = inviteSnap.toObject(GroupInvite::class.java)
+                    ?: throw IllegalStateException("INVITE_UNAVAILABLE")
+
+                val memberRef = db.collection(GROUPS_COLLECTION)
+                    .document(invite.groupId)
+                    .collection(MEMBERS_SUBCOLLECTION)
+                    .document(userId)
+                val existingMemberSnap = tx.get(memberRef)
+                if (existingMemberSnap.exists()) {
+                    return@runTransaction invite.groupId to true
+                }
+
+                val validation = GroupInviteCrypto.validateInviteForRedemption(
+                    token = normalized,
+                    revoked = invite.revoked,
+                    expiresAtMillis = invite.expiresAt?.toDate()?.time,
+                    useCount = invite.useCount,
+                    maxUses = invite.maxUses,
+                    nowMillis = System.currentTimeMillis(),
+                    isAlreadyMember = false
+                )
+                when (validation) {
+                    GroupInviteCrypto.InviteValidationResult.Valid -> {
+                        tx.update(
+                            inviteRef,
+                            mapOf(
+                                "useCount" to FieldValue.increment(1L),
+                                "lastRedeemedBy" to userId,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        tx.set(
+                            memberRef,
+                            GroupMember.toInviteJoinCreateMap(
+                                uid = userId,
+                                groupId = invite.groupId,
+                                displayName = displayName,
+                                inviteToken = normalized
+                            )
+                        )
+                        invite.groupId to false
+                    }
+                    GroupInviteCrypto.InviteValidationResult.AlreadyMember -> invite.groupId to true
+                    GroupInviteCrypto.InviteValidationResult.Revoked -> throw IllegalStateException("INVITE_REVOKED")
+                    GroupInviteCrypto.InviteValidationResult.Expired -> throw IllegalStateException("INVITE_EXPIRED")
+                    GroupInviteCrypto.InviteValidationResult.Exhausted -> throw IllegalStateException("INVITE_EXHAUSTED")
+                    GroupInviteCrypto.InviteValidationResult.InvalidFormat -> throw IllegalStateException("INVITE_UNAVAILABLE")
+                }
+            }.await()
+
+            // Now that the user is an authenticated member, read the group metadata safely
+            val groupSnap = db.collection(GROUPS_COLLECTION).document(joinedGroupId).get().await()
+            val group = groupSnap.toObject(SocialGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                ?: SocialGroup(id = joinedGroupId, name = "Grupo")
+            InviteRedemptionOutcome.Joined(group = group, alreadyMember = alreadyMember)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IllegalStateException) {
+            when (e.message) {
+                "INVITE_REVOKED" -> InviteRedemptionOutcome.InvalidOrUnavailable("Esta invitación fue revocada por el administrador.")
+                "INVITE_EXPIRED" -> InviteRedemptionOutcome.InvalidOrUnavailable("Esta invitación ha caducado. Pide una nueva.")
+                "INVITE_EXHAUSTED" -> InviteRedemptionOutcome.InvalidOrUnavailable("Esta invitación ya alcanzó su límite de usos.")
+                else -> InviteRedemptionOutcome.InvalidOrUnavailable("Invitación inválida, caducada, revocada o ya utilizada.")
+            }
+        } catch (e: Exception) {
+            val raw = e.message.orEmpty()
+            handleFirestoreError(e, OperationType.WRITE, inviteRef.path)
+            if (raw.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                InviteRedemptionOutcome.InvalidOrUnavailable(
+                    "Invitación inválida, caducada, revocada o ya utilizada."
+                )
+            } else {
+                InviteRedemptionOutcome.Error(
+                    "No se pudo completar la unión: ${e.localizedMessage ?: "error de conexión"}"
+                )
+            }
+        }
+    }
+
+    /**
+     * Reversible lazy self-backfill for users who are ALREADY members of a legacy v1 group
+     * (listed in legacy memberIds). Never grants access to non-members.
+     */
+    suspend fun backfillLegacyMembershipIfNeeded(
+        group: SocialGroup,
+        userId: String = requireUserId(),
+        displayName: String
+    ): Result<Unit> = runCatching {
+        if (group.id.isBlank() || !group.memberIds.contains(userId)) return@runCatching
+        val memberRef = db.collection(GROUPS_COLLECTION)
+            .document(group.id)
+            .collection(MEMBERS_SUBCOLLECTION)
+            .document(userId)
+        val snap = memberRef.get().await()
+        if (!snap.exists()) {
+            val role = if (group.createdBy == userId) GroupRole.OWNER else GroupRole.MEMBER
+            memberRef.set(GroupMember.toLegacyBackfillCreateMap(userId, group.id, displayName, role)).await()
+        }
+    }
+
+    suspend fun updateOwnMemberDisplayName(
+        groupId: String,
+        userId: String = requireUserId(),
+        displayName: String
+    ): Result<Unit> = runCatching {
+        val memberRef = db.collection(GROUPS_COLLECTION)
+            .document(groupId)
+            .collection(MEMBERS_SUBCOLLECTION)
+            .document(userId)
+        memberRef.update(GroupMember.toSelfUpdateMap(displayName)).await()
+    }
+
+    suspend fun leaveGroup(groupId: String, userId: String = requireUserId()): Result<Unit> = runCatching {
+        val memberRef = db.collection(GROUPS_COLLECTION)
+            .document(groupId)
+            .collection(MEMBERS_SUBCOLLECTION)
+            .document(userId)
+        try {
+            memberRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, memberRef.path)
             throw e
         }
     }
@@ -458,6 +645,8 @@ class SocialRepository(
 
     companion object {
         const val GROUPS_COLLECTION = "groups"
+        const val MEMBERS_SUBCOLLECTION = "members"
+        const val GROUP_INVITES_COLLECTION = "group_invites"
         const val USERS_COLLECTION = "users"
         const val OUTINGS_COLLECTION = "outings"
         const val CHAT_COLLECTION = "chat_messages"

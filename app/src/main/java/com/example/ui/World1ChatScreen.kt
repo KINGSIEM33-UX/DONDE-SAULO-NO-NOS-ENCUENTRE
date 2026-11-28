@@ -408,7 +408,7 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                     )
                     Column {
                         Text(
-                            text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" } else "Chat personal",
+                            text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo activo" } else "Chat personal",
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -424,7 +424,7 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                             )
                             Text(
                                 text = if (hasActiveGroup) {
-                                    "${members.size} miembros  •  ${profile.groupInviteCode}"
+                                    "${members.size} miembros  •  Grupo privado"
                                 } else {
                                     "Crea o únete a un grupo en Inicio para chatear juntos"
                                 },

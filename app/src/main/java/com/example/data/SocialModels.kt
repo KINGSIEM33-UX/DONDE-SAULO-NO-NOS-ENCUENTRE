@@ -83,14 +83,33 @@ enum class RsvpChoice(val label: String) {
     }
 }
 
+enum class GroupRole(val label: String) {
+    OWNER("Propietario"),
+    ADMIN("Admin"),
+    MEMBER("Miembro");
+
+    val canManageInvites: Boolean
+        get() = this == OWNER || this == ADMIN
+
+    val canManageMembers: Boolean
+        get() = this == OWNER || this == ADMIN
+
+    companion object {
+        fun fromString(value: String?): GroupRole {
+            return entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: MEMBER
+        }
+    }
+}
+
 @IgnoreExtraProperties
 data class SocialGroup(
     @DocumentId val id: String = "",
     val name: String = "Grupo de Salidas",
-    val inviteCode: String = "",
+    val inviteCode: String = "", // Legacy v1 read-only metadata; v2 groups store invites in /group_invites/{token}
     val createdBy: String = "",
-    val memberIds: List<String> = emptyList(),
-    val memberNames: Map<String, String> = emptyMap(),
+    val schemaVersion: Long = 1L,
+    val memberIds: List<String> = emptyList(), // Legacy v1 fallback; v2 membership lives in /groups/{groupId}/members/{uid}
+    val memberNames: Map<String, String> = emptyMap(), // Legacy v1 fallback
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -110,6 +129,135 @@ data class SocialGroup(
             "updatedAt" to FieldValue.serverTimestamp()
         )
     }
+
+    /**
+     * Schema v2 group creation payload: decoupled from invite tokens and from mutable
+     * shared member arrays (membership is stored per-user in /groups/{groupId}/members/{uid}).
+     */
+    fun toV2CreateMap(creatorUid: String): Map<String, Any> {
+        return mapOf(
+            "name" to name.take(80).ifBlank { "Mi Grupo" },
+            "createdBy" to creatorUid,
+            "schemaVersion" to 2L,
+            "createdAt" to (createdAt ?: FieldValue.serverTimestamp()),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+}
+
+@IgnoreExtraProperties
+data class GroupMember(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val groupId: String = "",
+    val displayName: String = "",
+    val role: String = GroupRole.MEMBER.name,
+    val inviteToken: String = "",
+    @ServerTimestamp val joinedAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val groupRole: GroupRole
+        get() = GroupRole.fromString(role)
+
+    companion object {
+        fun toOwnerCreateMap(uid: String, groupId: String, displayName: String): Map<String, Any> = mapOf(
+            "userId" to uid,
+            "groupId" to groupId.take(128),
+            "displayName" to displayName.take(60).ifBlank { "Usuario" },
+            "role" to GroupRole.OWNER.name,
+            "inviteToken" to "",
+            "joinedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        fun toInviteJoinCreateMap(
+            uid: String,
+            groupId: String,
+            displayName: String,
+            inviteToken: String
+        ): Map<String, Any> = mapOf(
+            "userId" to uid,
+            "groupId" to groupId.take(128),
+            "displayName" to displayName.take(60).ifBlank { "Usuario" },
+            "role" to GroupRole.MEMBER.name,
+            "inviteToken" to inviteToken.take(64),
+            "joinedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        fun toLegacyBackfillCreateMap(
+            uid: String,
+            groupId: String,
+            displayName: String,
+            role: GroupRole
+        ): Map<String, Any> = mapOf(
+            "userId" to uid,
+            "groupId" to groupId.take(128),
+            "displayName" to displayName.take(60).ifBlank { "Usuario" },
+            "role" to role.name,
+            "inviteToken" to "",
+            "joinedAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        fun toSelfUpdateMap(displayName: String): Map<String, Any> = mapOf(
+            "displayName" to displayName.take(60).ifBlank { "Usuario" },
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+}
+
+@IgnoreExtraProperties
+data class GroupInvite(
+    @DocumentId val id: String = "",
+    val token: String = "",
+    val groupId: String = "",
+    val groupNamePreview: String = "",
+    val createdBy: String = "",
+    val revoked: Boolean = false,
+    val expiresAt: Timestamp? = null,
+    val maxUses: Long = 1L,
+    val useCount: Long = 0L,
+    val lastRedeemedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun isActiveAt(nowMillis: Long): Boolean {
+        if (revoked) return false
+        val expMs = expiresAt?.toDate()?.time ?: return false
+        if (expMs <= nowMillis) return false
+        return maxUses > 0L && useCount < maxUses
+    }
+
+    companion object {
+        fun toCreateMap(
+            token: String,
+            groupId: String,
+            groupNamePreview: String,
+            creatorUid: String,
+            expiresAt: Timestamp,
+            maxUses: Long
+        ): Map<String, Any> = mapOf(
+            "token" to token.take(64),
+            "groupId" to groupId.take(128),
+            "groupNamePreview" to groupNamePreview.take(80).ifBlank { "Grupo" },
+            "createdBy" to creatorUid,
+            "revoked" to false,
+            "expiresAt" to expiresAt,
+            "maxUses" to maxUses.coerceIn(1L, 100L),
+            "useCount" to 0L,
+            "lastRedeemedBy" to "",
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+}
+
+sealed class InviteRedemptionOutcome {
+    data class Joined(val group: SocialGroup, val alreadyMember: Boolean) : InviteRedemptionOutcome()
+    data object LegacyCodeUnsupported : InviteRedemptionOutcome()
+    data class InvalidOrUnavailable(val message: String) : InviteRedemptionOutcome()
+    data class Error(val message: String) : InviteRedemptionOutcome()
 }
 
 @IgnoreExtraProperties

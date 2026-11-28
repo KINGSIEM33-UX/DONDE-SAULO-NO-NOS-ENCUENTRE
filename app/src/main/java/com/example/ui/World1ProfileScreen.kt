@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
@@ -42,6 +43,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sync
@@ -84,10 +87,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
 import coil.compose.AsyncImage
+import com.example.data.GroupInvite
+import com.example.data.GroupInviteCrypto
+import com.example.data.GroupRole
 import com.example.data.MediaStorageHelper
 import com.example.data.OutingStatus
 import com.example.ui.theme.StatusConfirmedGreen
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 @Composable
 fun World1ProfileScreen(viewModel: MainViewModel) {
@@ -109,6 +117,10 @@ fun ProfileScreen(
     val profile by viewModel.userProfile.collectAsState()
     val outings by viewModel.outings.collectAsState()
     val groupMembers by viewModel.groupMembers.collectAsState()
+    val activeInvites by viewModel.activeGroupInvites.collectAsState()
+    val currentRole by viewModel.currentGroupRole.collectAsState()
+    val inviteFeedback by viewModel.inviteActionFeedback.collectAsState()
+    val isInviteBusy by viewModel.isInviteActionBusy.collectAsState()
     val isLoggedIn by viewModel.isUserLoggedIn.collectAsState()
     val userEmail by viewModel.userEmail.collectAsState()
     val statusMsg by viewModel.authStatusMessage.collectAsState()
@@ -119,6 +131,8 @@ fun ProfileScreen(
     var showAddCuriosityDialog by remember { mutableStateOf(false) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showJoinGroupDialog by remember { mutableStateOf(false) }
+    var showCreateInviteDialog by remember { mutableStateOf(false) }
+    var showLeaveGroupDialog by remember { mutableStateOf(false) }
     var quickAiPrompt by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -311,7 +325,7 @@ fun ProfileScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" } else "Sin grupo activo",
+                                text = if (hasActiveGroup) profile.groupName.ifBlank { "Grupo activo" } else "Sin grupo activo",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (hasActiveGroup) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -450,7 +464,7 @@ fun ProfileScreen(
             }
         }
 
-        // --- 4. ACTIVE GROUP & INVITE CODE ---
+        // --- 4. ACTIVE GROUP & REVOCABLE HIGH-ENTROPY INVITES ---
         EditorialSectionLabel(text = "Grupo activo")
         EditorialCard(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -458,6 +472,12 @@ fun ProfileScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 if (hasActiveGroup) {
+                    val roleLabel = when (currentRole) {
+                        GroupRole.OWNER -> "Propietario"
+                        GroupRole.ADMIN -> "Admin"
+                        GroupRole.MEMBER -> "Miembro"
+                        null -> "Miembro"
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -469,43 +489,31 @@ fun ProfileScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             EditorialIconBadge(icon = Icons.Default.Groups)
-                            Column {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
-                                    text = profile.groupName.ifBlank { "Grupo ${profile.groupInviteCode}" },
+                                    text = profile.groupName.ifBlank { "Grupo activo" },
                                     style = MaterialTheme.typography.titleMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Código ${profile.groupInviteCode}  •  ${groupMembers.size} miembros",
+                                    text = "${groupMembers.size} miembros  •  $roleLabel",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        if (profile.groupInviteCode.isNotBlank()) {
-                            Row {
-                                IconButton(
-                                    onClick = {
-                                        clipboard.setText(AnnotatedString(profile.groupInviteCode))
-                                        Toast.makeText(context, "Código copiado: ${profile.groupInviteCode}", Toast.LENGTH_SHORT).show()
-                                    }
-                                ) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copiar código", modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(
-                                    onClick = {
-                                        val intent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(
-                                                Intent.EXTRA_TEXT,
-                                                "Únete a nuestro grupo '${profile.groupName}' en Adora con el código: ${profile.groupInviteCode}"
-                                            )
-                                        }
-                                        context.startActivity(Intent.createChooser(intent, "Invitar al grupo"))
-                                    }
-                                ) {
-                                    Icon(Icons.Default.Share, contentDescription = "Compartir código", modifier = Modifier.size(18.dp))
-                                }
+
+                        if (currentRole == GroupRole.MEMBER || currentRole == GroupRole.ADMIN) {
+                            IconButton(
+                                onClick = { showLeaveGroupDialog = true },
+                                enabled = !isInviteBusy
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Logout,
+                                    contentDescription = "Salir del grupo",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
@@ -531,6 +539,91 @@ fun ProfileScreen(
                             }
                         }
                     }
+
+                    // Revocable high-entropy invites section (OWNER / ADMIN only)
+                    if (currentRole?.canManageInvites == true) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Invitaciones privadas",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Tokens de 160 bits con caducidad y revocación",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = { showCreateInviteDialog = true },
+                                enabled = !isInviteBusy,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Invitar", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+
+                        val nowMs = System.currentTimeMillis()
+                        val usableInvites = activeInvites.filter { it.isActiveAt(nowMs) }
+                        val inactiveCount = activeInvites.size - usableInvites.size
+
+                        if (usableInvites.isEmpty()) {
+                            Text(
+                                text = "No hay invitaciones activas ahora mismo. Pulsa «Invitar» para generar un enlace revocable.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                usableInvites.take(4).forEach { invite ->
+                                    GroupInviteRow(
+                                        invite = invite,
+                                        enabled = !isInviteBusy,
+                                        onCopy = {
+                                            clipboard.setText(AnnotatedString(invite.token))
+                                            Toast.makeText(context, "Token de invitación copiado", Toast.LENGTH_SHORT).show()
+                                        },
+                                        onShare = {
+                                            val shareText = buildString {
+                                                append("Únete a nuestro grupo '${profile.groupName.ifBlank { invite.groupNamePreview }}' en Adora.\n")
+                                                append("Abre Perfil → Unirse y pega esta invitación privada:\n")
+                                                append(invite.token)
+                                            }
+                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_TEXT, shareText)
+                                            }
+                                            context.startActivity(Intent.createChooser(intent, "Compartir invitación privada"))
+                                        },
+                                        onRevoke = { viewModel.revokeGroupInvite(invite.token) }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (inactiveCount > 0) {
+                            Text(
+                                text = "$inactiveCount invitación(es) anteriores revocadas, agotadas o caducadas.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Solo el propietario o administradores pueden emitir o revocar invitaciones de este grupo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 } else {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -544,10 +637,55 @@ fun ProfileScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Crea un grupo propio o únete con un código de invitación para compartir salidas, mapa y chat.",
+                                text = "Crea un grupo propio o únete pegando una invitación privada (INV-…) para compartir salidas, mapa y chat.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+
+                if (isInviteBusy) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = inviteFeedback ?: "Procesando solicitud segura…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                } else if (!inviteFeedback.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = inviteFeedback!!,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { viewModel.clearInviteActionFeedback() },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cerrar aviso",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -558,6 +696,7 @@ fun ProfileScreen(
                 ) {
                     OutlinedButton(
                         onClick = { showCreateGroupDialog = true },
+                        enabled = !isInviteBusy,
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         modifier = Modifier.weight(1f).height(44.dp)
@@ -568,6 +707,7 @@ fun ProfileScreen(
                     }
                     Button(
                         onClick = { showJoinGroupDialog = true },
+                        enabled = !isInviteBusy,
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f).height(44.dp)
                     ) {
@@ -825,32 +965,220 @@ fun ProfileScreen(
     }
 
     if (showJoinGroupDialog) {
-        var codeInput by remember { mutableStateOf("") }
+        var tokenInput by remember { mutableStateOf("") }
+        val isLegacyTyped = GroupInviteCrypto.isLegacyGroupCode(tokenInput)
         AlertDialog(
             onDismissRequest = { showJoinGroupDialog = false },
-            title = { Text("Unirse a un grupo", style = MaterialTheme.typography.titleLarge) },
+            title = { Text("Unirse con invitación", style = MaterialTheme.typography.titleLarge) },
             text = {
-                OutlinedTextField(
-                    value = codeInput,
-                    onValueChange = { codeInput = it },
-                    label = { Text("Código de invitación (ej. QUEDA-2026)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Pega el token privado (INV-…) o el mensaje completo que te compartió el propietario del grupo.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("Token de invitación (INV-…)") },
+                        maxLines = 3,
+                        isError = isLegacyTyped,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (isLegacyTyped) {
+                        Text(
+                            text = "Los códigos antiguos de 4 dígitos (ej. QUEDA-2026) ya no permiten autounirse por seguridad. Pide al propietario una invitación nueva.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.joinOutingGroupByCode(codeInput)
+                        viewModel.joinOutingGroupByCode(tokenInput)
                         showJoinGroupDialog = false
                     },
-                    enabled = codeInput.isNotBlank()
+                    enabled = tokenInput.isNotBlank() && !isLegacyTyped
                 ) { Text("Unirse") }
             },
             dismissButton = {
                 TextButton(onClick = { showJoinGroupDialog = false }) { Text("Cancelar") }
             }
         )
+    }
+
+    if (showCreateInviteDialog) {
+        var selectedMultiUse by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { showCreateInviteDialog = false },
+            title = { Text("Crear invitación privada", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Cada invitación genera un token independiente de 160 bits. Podrás revocarla en cualquier momento sin afectar al grupo.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Surface(
+                        onClick = { selectedMultiUse = false },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (!selectedMultiUse) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(
+                            width = if (!selectedMultiUse) 1.5.dp else 0.75.dp,
+                            color = if (!selectedMultiUse) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "1 uso  •  Caduca en 24 horas (Recomendado)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Ideal para invitar a una sola persona de forma privada.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Surface(
+                        onClick = { selectedMultiUse = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selectedMultiUse) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(
+                            width = if (selectedMultiUse) 1.5.dp else 0.75.dp,
+                            color = if (selectedMultiUse) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Hasta 10 usos  •  Caduca en 7 días",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Útil para compartir con varios amigos a la vez; revocable al instante.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val maxUses = if (selectedMultiUse) 10 else 1
+                        val hours = if (selectedMultiUse) 24 * 7 else 24
+                        viewModel.generateGroupInvite(maxUses = maxUses, expiresInHours = hours) { created ->
+                            clipboard.setText(AnnotatedString(created.token))
+                            Toast.makeText(context, "Invitación creada y copiada al portapapeles", Toast.LENGTH_SHORT).show()
+                        }
+                        showCreateInviteDialog = false
+                    }
+                ) { Text("Generar y copiar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateInviteDialog = false }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    if (showLeaveGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveGroupDialog = false },
+            title = { Text("Salir del grupo", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Text(
+                    text = "Dejarás de ver las salidas, mensajes e instantáneas de '${profile.groupName.ifBlank { "este grupo" }}'. Para volver necesitarás una nueva invitación.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.leaveCurrentGroup()
+                        showLeaveGroupDialog = false
+                    }
+                ) { Text("Salir del grupo") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveGroupDialog = false }) { Text("Cancelar") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun GroupInviteRow(
+    invite: GroupInvite,
+    enabled: Boolean,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onRevoke: () -> Unit
+) {
+    val previewToken = if (invite.token.length > 16) {
+        "${invite.token.take(12)}…${invite.token.takeLast(4)}"
+    } else {
+        invite.token
+    }
+    val expiryLabel = remember(invite.expiresAt) {
+        val date = invite.expiresAt?.toDate()
+        if (date != null) {
+            val fmt = SimpleDateFormat("dd MMM · HH:mm", Locale("es", "ES"))
+            "Caduca ${fmt.format(date)}"
+        } else {
+            "Activa"
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = previewToken,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "${invite.useCount}/${invite.maxUses} usos  •  $expiryLabel",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onCopy, enabled = enabled, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copiar invitación", modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = onShare, enabled = enabled, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Default.Share, contentDescription = "Compartir invitación", modifier = Modifier.size(16.dp))
+                }
+                IconButton(onClick = onRevoke, enabled = enabled, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = "Revocar invitación",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
