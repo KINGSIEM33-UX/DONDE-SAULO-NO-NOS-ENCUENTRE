@@ -1099,6 +1099,20 @@ test("Personal scope (long & special/UTF-8 UIDs): 119-char boundary uses direct;
   );
 });
 
+test("Reserved personal prefix rejects creation of unusable social groups", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const now = pastTs();
+  await assertFails(aliceDb.collection("groups").doc("personal_team").set({
+    name: "Grupo reservado",
+    inviteCode: "personal_team",
+    createdBy: ALICE_UID,
+    memberIds: [ALICE_UID],
+    memberNames: { [ALICE_UID]: "Alice" },
+    createdAt: now,
+    updatedAt: now,
+  }));
+});
+
 test("Personal scope collision & squatting defense (hashed UIDs): disjoint namespaces block hex-UID collisions, sha256_-prefixed UIDs, and /groups/personal_sha256_* squatting", async () => {
   const specialAlice = "alice.special@example.com";
   const aliceHash = sha256HexLower(specialAlice);

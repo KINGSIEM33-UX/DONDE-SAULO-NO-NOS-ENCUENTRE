@@ -209,8 +209,8 @@ class SocialSessionPolicyTest {
         val longScope = SocialSessionPolicy.resolveGroupIdForWrite("", longUid)
         val invalidScope = SocialSessionPolicy.resolveGroupIdForWrite("", invalidUid)
 
-        assertThat(longScope).startsWith(SocialSessionPolicy.PERSONAL_GROUP_PREFIX)
-        assertThat(longScope).hasLength(73)
+        assertThat(longScope).startsWith("personal_sha256_")
+        assertThat(longScope).hasLength(80)
         assertThat(longScope).isEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", longUid))
         assertThat(invalidScope).isNotEqualTo(SocialSessionPolicy.resolveGroupIdForWrite("", "uidwithcolon"))
     }

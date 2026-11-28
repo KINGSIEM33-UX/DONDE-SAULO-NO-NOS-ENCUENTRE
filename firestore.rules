@@ -95,6 +95,7 @@ service cloud.firestore {
 
       allow create: if isSignedIn() &&
                        isValidId(groupId) &&
+                       !isPersonalGroupId(groupId) &&
                        isValidGroup(incoming()) &&
                        incoming().createdBy == request.auth.uid &&
                        request.auth.uid in incoming().memberIds;
