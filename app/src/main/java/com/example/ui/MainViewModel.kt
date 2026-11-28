@@ -127,31 +127,31 @@ class MainViewModel(
     // --- World 1: User Profile, Tastes/Curiosities & Group ---
     private val defaultGuestProfile = UserProfile(
         userId = "local_user",
-        username = "Alex_Quedadas",
-        bio = "Organizando los mejores planes del grupo ✨ | Mapas, rutas y juegos",
-        avatarUrl = "avatar_neon",
+        username = "alex_salidas",
+        bio = "Organizando planes, rutas y encuentros con el grupo.",
+        avatarUrl = "avatar_obsidian",
         curiosities = listOf(
-            "🍕 Fanático de las pizzas artesanales",
-            "🎳 Campeón invicto en los bolos",
-            "🏔️ Rutas de montaña los sábados",
-            "🎮 Rey del Impostor y 2048",
-            "📸 Fotógrafo oficial de las salidas"
+            "Cocina artesanal",
+            "Senderismo de montaña",
+            "Bolera y ocio nocturno",
+            "Fotografía urbana",
+            "Juegos de mesa"
         ),
         groupId = "QUEDA-2026",
         groupInviteCode = "QUEDA-2026",
-        groupName = "Peña Los Inseparables 🔥",
+        groupName = "Los Inseparables",
         gamesHighScore = 340L
     )
 
     val userProfile = MutableStateFlow(defaultGuestProfile)
 
     private val defaultGuestMembers = listOf(
-        "Alex (Tú) 👑",
-        "Sofía ✨",
-        "Mateo 🎸",
-        "Valeria 📸",
-        "Lucas 🍕",
-        "Elena 🌟"
+        "Alex (Tú)",
+        "Sofía",
+        "Mateo",
+        "Valeria",
+        "Lucas",
+        "Elena"
     )
     val groupMembers = MutableStateFlow(defaultGuestMembers)
 
@@ -169,7 +169,7 @@ class MainViewModel(
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "18 €",
             kitItems = "Calcetines para bolera, carnet joven y batería portátil",
-            additionalInfo = "¡Reserva confirmada! Puntualidad para no perder la pista 4.",
+            additionalInfo = "Reserva confirmada para la pista 4. Se recomienda llegar 10 minutos antes.",
             placePhotoUrl = "preset_bowling",
             destLat = 40.4168,
             destLng = -3.7038,
@@ -193,7 +193,7 @@ class MainViewModel(
             status = OutingStatus.PLANNED.name,
             budgetPerPerson = "12 €",
             kitItems = "Mochila, 1.5L de agua, gorra, bocadillo y manta de picnic",
-            additionalInfo = "Pendiente de confirmar según el clima del jueves.",
+            additionalInfo = "Pendiente de confirmar según la previsión meteorológica del jueves.",
             placePhotoUrl = "preset_mountain",
             destLat = 40.4240,
             destLng = -3.6880,
@@ -216,8 +216,8 @@ class MainViewModel(
             time = "21:00",
             status = OutingStatus.CANCELLED.name,
             budgetPerPerson = "10 €",
-            kitItems = "Chaqueta abrigada y palomitas",
-            additionalInfo = "Cancelada por aviso de lluvia intensa. La moveremos al próximo mes.",
+            kitItems = "Chaqueta abrigada",
+            additionalInfo = "Cancelada por aviso de lluvia intensa. Se reprogramará el próximo mes.",
             placePhotoUrl = "preset_cinema",
             destLat = 40.4110,
             destLng = -3.6980,
@@ -233,14 +233,14 @@ class MainViewModel(
             id = "outing_upcoming_escape",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
-            title = "Tarde de Escape Room & Helados",
+            title = "Tarde de Escape Room",
             location = "Enigma Escape Center",
             meetingPoint = "Cafetería Sol (Esquina Reloj)",
             dateIso = dateOffsetIso(16),
             time = "18:00",
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "22 €",
-            kitItems = "Gafas de ver, ropa cómoda y muchas neuronas",
+            kitItems = "Ropa cómoda",
             additionalInfo = "Nivel difícil: El Misterio del Faraón (60 minutos).",
             placePhotoUrl = "preset_escape",
             destLat = 40.4215,
@@ -257,15 +257,15 @@ class MainViewModel(
             id = "outing_history_past",
             ownerId = "local_user",
             groupId = "QUEDA-2026",
-            title = "Barbacoa en el Lago",
+            title = "Encuentro en el Lago",
             location = "Lago Azul Club",
             meetingPoint = "Parking Norte",
             dateIso = dateOffsetIso(-45),
             time = "13:00",
             status = OutingStatus.CONFIRMED.name,
             budgetPerPerson = "25 €",
-            kitItems = "Bañador, toalla, protector solar y hielo",
-            additionalInfo = "Una de las mejores salidas históricas del grupo.",
+            kitItems = "Toalla y protector solar",
+            additionalInfo = "Jornada completa de verano con todo el grupo.",
             placePhotoUrl = "preset_beach",
             destLat = 40.4085,
             destLng = -3.7120,
@@ -287,33 +287,33 @@ class MainViewModel(
         GroupChatMessage(
             id = "msg_1",
             senderId = "sofia_1",
-            senderName = "Sofía ✨",
+            senderName = "Sofía",
             groupId = "QUEDA-2026",
-            text = "¡Chicos! Ya marqué la Cena & Noche de Bolera en el calendario con el doble circulito verde 🟢.",
+            text = "Ya dejé confirmada la Cena y Noche de Bolera en el calendario del grupo.",
             messageType = "TEXT",
-            reactions = listOf("🔥", "❤️")
+            reactions = listOf("👍")
         ),
         GroupChatMessage(
             id = "msg_2",
             senderId = "mateo_2",
-            senderName = "Mateo 🎸",
+            senderName = "Mateo",
             groupId = "QUEDA-2026",
             text = "Nota de voz (0:08)",
             messageType = "VOICE",
             audioDurationSec = 8L,
-            transcription = "¡Genial! Yo llevo la batería portátil y nos vemos en el punto de encuentro a las ocho y media.",
-            reactions = listOf("🙌", "👍")
+            transcription = "Perfecto, yo llevo batería portátil y nos vemos en el punto de encuentro a las 20:30.",
+            reactions = listOf("👍")
         ),
         GroupChatMessage(
             id = "msg_3",
             senderId = "valeria_3",
-            senderName = "Valeria 📸",
+            senderName = "Valeria",
             groupId = "QUEDA-2026",
-            text = "He subido una instantánea nueva en la cámara de Salidas 📷✨ ¡Miradla!",
+            text = "He compartido la ficha actualizada de nuestra próxima salida.",
             messageType = "OUTING_SHARE",
             sharedOutingId = "outing_upcoming_confirmed",
             sharedOutingTitle = "Cena & Noche de Bolera (${dateOffsetIso(2)} • 18 €)",
-            reactions = listOf("❤️")
+            reactions = emptyList()
         )
     )
     val groupChatMessages = MutableStateFlow<List<GroupChatMessage>>(defaultGroupChat)
@@ -323,10 +323,10 @@ class MainViewModel(
         OutingStory(
             id = "story_1",
             authorId = "valeria_3",
-            authorName = "Valeria 📸",
+            authorName = "Valeria",
             groupId = "QUEDA-2026",
-            caption = "¡Calentando motores para la noche de bolera! 🎳🔥",
-            filterStyle = "NEON_VIBES",
+            caption = "Preparando la noche de bolera con el equipo.",
+            filterStyle = "OBSIDIAN",
             mediaUri = "story_bowling_neon",
             outingTitle = "Cena & Noche de Bolera",
             likesCount = 14L
@@ -334,10 +334,10 @@ class MainViewModel(
         OutingStory(
             id = "story_2",
             authorId = "sofia_1",
-            authorName = "Sofía ✨",
+            authorName = "Sofía",
             groupId = "QUEDA-2026",
-            caption = "Vistas del Mirador para la ruta del sábado 🏔️🌿",
-            filterStyle = "GOLDEN_SUNSET",
+            caption = "Vistas del Mirador para la ruta del sábado.",
+            filterStyle = "WARM_GOLD",
             mediaUri = "story_mountain_sunset",
             outingTitle = "Ruta de Senderismo y Picnic",
             likesCount = 9L
@@ -345,10 +345,10 @@ class MainViewModel(
         OutingStory(
             id = "story_3",
             authorId = "mateo_2",
-            authorName = "Mateo 🎸",
+            authorName = "Mateo",
             groupId = "QUEDA-2026",
-            caption = "¿Quién ganará hoy al Impostor en la quedada? 🕵️‍♂️🍕",
-            filterStyle = "CYBER_RETRO",
+            caption = "Listos para el Escape Room del fin de semana.",
+            filterStyle = "FOREST",
             mediaUri = "story_pizza_party",
             outingTitle = "Tarde de Escape Room",
             likesCount = 19L
@@ -361,7 +361,7 @@ class MainViewModel(
         listOf(
             ChatMessage(
                 "ai",
-                "¡Hola! Soy tu Agente IA de Salidas y Quedadas 🤖✨. Puedo crear salidas automáticamente en el calendario y el mapa, cambiar su estado (Confirmada 🟢, Pensada ⚪, Cancelada 🔴), anotar tu asistencia, actualizar el kit o sugerirte planes. ¿Qué organizamos hoy?"
+                "Soy tu asistente de Adora. Puedo crear salidas en el calendario y mapa, actualizar su estado, confirmar tu asistencia o preparar el kit del grupo. ¿Qué necesitas organizar?"
             )
         )
     )

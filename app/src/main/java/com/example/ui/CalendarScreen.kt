@@ -136,7 +136,7 @@ fun CalendarScreen(viewModel: MainViewModel) {
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .padding(16.dp)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Añadir programa")
             }
@@ -207,7 +207,7 @@ fun CalendarScreen(viewModel: MainViewModel) {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp))
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
                     .padding(12.dp)
             ) {
                 LazyVerticalGrid(

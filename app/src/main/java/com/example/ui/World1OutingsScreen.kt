@@ -1,5 +1,7 @@
 package com.example.ui
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,27 +29,25 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backpack
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Handshake
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Payments
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.Outing
 import com.example.data.OutingStatus
 import com.example.data.RsvpChoice
+import com.example.data.todayIsoDate
 import com.example.ui.theme.StatusCancelledOuter
 import com.example.ui.theme.StatusCancelledRed
 import com.example.ui.theme.StatusConfirmedGreen
@@ -95,16 +97,16 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     val outings by viewModel.outings.collectAsState()
     val stories by viewModel.stories.collectAsState()
     val defaultCurrency by viewModel.defaultCurrency.collectAsState()
+    val currentUserId by viewModel.currentUserId.collectAsState()
 
     val todayCal = remember { Calendar.getInstance() }
-    val todayIso = remember { com.example.data.todayIsoDate() }
+    val todayIso = remember { todayIsoDate() }
     var displayedYear by remember { mutableIntStateOf(todayCal.get(Calendar.YEAR)) }
     var displayedMonthZeroIndexed by remember { mutableIntStateOf(todayCal.get(Calendar.MONTH)) }
 
     var showOutingFormDialog by remember { mutableStateOf(false) }
     var editingOuting by remember { mutableStateOf<Outing?>(null) }
     var preselectedDateIso by remember { mutableStateOf(todayIso) }
-
     var activeDetailOuting by remember { mutableStateOf<Outing?>(null) }
 
     val monthOutingsMap = remember(outings, displayedYear, displayedMonthZeroIndexed) {
@@ -124,116 +126,133 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // --- 1. TOP BAR: TITLE + SUBTLE HISTORIAL PILL + CAMERA (📷) + AI AGENT (🤖) ---
+            // --- 1. EDITORIAL HEADER (Matches Approved Mockups) ---
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
                             text = "Salidas",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Black,
+                            style = MaterialTheme.typography.headlineLarge,
                             color = MaterialTheme.colorScheme.onBackground
                         )
-                        // Subtle, at-a-glance "Historial de salidas" link
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            EditorialWorldTogglePill(
+                                label = "Biblia",
+                                icon = Icons.AutoMirrored.Filled.MenuBook,
+                                onClick = { viewModel.switchToWorld2Bible() }
+                            )
+
+                            IconButton(
+                                onClick = { viewModel.showCameraStoriesModal.value = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .border(0.75.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                    .testTag("open_camera_stories_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = "Álbum e historias",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.showSocialAgentModal.value = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .border(0.75.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                    .testTag("open_ai_agent_outings_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "Asistente IA",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Subtle secondary metadata strip
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Surface(
                             onClick = { viewModel.showOutingHistoryModal.value = true },
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                            modifier = Modifier
-                                .padding(top = 2.dp)
-                                .testTag("open_outing_history_button")
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.testTag("open_outing_history_button")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.History,
-                                    contentDescription = "Historial de salidas",
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
                                 )
                                 Text(
-                                    text = "Historial de salidas (${outings.size})",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
+                                    text = "Historial (${outings.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Surface(
+                            onClick = { viewModel.showCameraStoriesModal.value = true },
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "Álbum ($totalAlbumPhotos)",
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // CAMERA & INSTANTÁNEAS BUTTON (📷)
-                        Surface(
-                            onClick = { viewModel.showCameraStoriesModal.value = true },
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("open_camera_stories_button")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CameraAlt,
-                                    contentDescription = "Cámara e Instantáneas",
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Text(
-                                    text = "Álbum ($totalAlbumPhotos)",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
-                        }
-
-                        // AI AGENT BUTTON (🤖✨)
-                        IconButton(
-                            onClick = { viewModel.showSocialAgentModal.value = true },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer)
-                                .testTag("open_ai_agent_outings_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SmartToy,
-                                contentDescription = "Agente IA",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
                 }
             }
 
-            // --- 2. MINI CALENDAR WITH DOUBLE GREEN CIRCLE / GRAY CIRCLE / RED CIRCLE ---
+            // --- 2. PRECISION EDITORIAL MONTHLY CALENDAR ---
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        // Month Navigation Bar
+                EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -248,24 +267,16 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                         displayedMonthZeroIndexed--
                                     }
                                 },
-                                modifier = Modifier.size(48.dp).testTag("calendar_prev_month_btn")
+                                modifier = Modifier.size(38.dp).testTag("calendar_prev_month_btn")
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Mes anterior")
                             }
 
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${MONTH_NAMES_ES[displayedMonthZeroIndexed]} $displayedYear",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Toca cualquier número para crear o editar salida",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
+                            Text(
+                                text = "${MONTH_NAMES_ES[displayedMonthZeroIndexed]} $displayedYear",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
 
                             IconButton(
                                 onClick = {
@@ -276,15 +287,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                         displayedMonthZeroIndexed++
                                     }
                                 },
-                                modifier = Modifier.size(48.dp).testTag("calendar_next_month_btn")
+                                modifier = Modifier.size(38.dp).testTag("calendar_next_month_btn")
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Mes siguiente")
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        // Weekday Headers (L M X J V S D)
                         val daysOfWeek = listOf("L", "M", "X", "J", "V", "S", "D")
                         Row(modifier = Modifier.fillMaxWidth()) {
                             daysOfWeek.forEach { d ->
@@ -292,16 +302,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                     text = d,
                                     modifier = Modifier.weight(1f),
                                     textAlign = TextAlign.Center,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                        // Calendar Days Grid
                         val cal = remember(displayedYear, displayedMonthZeroIndexed) {
                             Calendar.getInstance().apply {
                                 set(Calendar.YEAR, displayedYear)
@@ -309,16 +317,14 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                 set(Calendar.DAY_OF_MONTH, 1)
                             }
                         }
-                        val firstDayOfWeekJava = cal.get(Calendar.DAY_OF_WEEK) // 1=Sun, 2=Mon...
+                        val firstDayOfWeekJava = cal.get(Calendar.DAY_OF_WEEK)
                         val mondayBasedOffset = if (firstDayOfWeekJava == Calendar.SUNDAY) 6 else firstDayOfWeekJava - 2
                         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
                         val totalCells = ((mondayBasedOffset + daysInMonth + 6) / 7) * 7
 
                         for (week in 0 until (totalCells / 7)) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 2.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                                 horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
                                 for (dow in 0..6) {
@@ -349,36 +355,35 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                                             }
                                         )
                                     } else {
-                                        Spacer(modifier = Modifier.weight(1f).height(48.dp))
+                                        Spacer(modifier = Modifier.weight(1f).height(44.dp))
                                     }
                                 }
                             }
                         }
 
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(modifier = Modifier.height(10.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                        Spacer(modifier = Modifier.height(8.dp))
 
-                        // Status Color Legend
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             CalendarLegendItem(
-                                label = "Confirmada (Doble verde)",
+                                label = "Confirmada",
                                 innerColor = StatusConfirmedGreen,
                                 outerRingColor = StatusConfirmedOuterRing,
                                 isDoubleCircle = true
                             )
                             CalendarLegendItem(
-                                label = "Pensada (Gris)",
+                                label = "Pensada",
                                 innerColor = StatusPlannedGray,
                                 outerRingColor = StatusPlannedOuter,
                                 isDoubleCircle = false
                             )
                             CalendarLegendItem(
-                                label = "Cancelada (Rojo)",
+                                label = "Cancelada",
                                 innerColor = StatusCancelledRed,
                                 outerRingColor = StatusCancelledOuter,
                                 isDoubleCircle = false
@@ -388,45 +393,51 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 }
             }
 
-            // --- 3. PRÓXIMAS SALIDAS HEADER ---
+            // --- 3. PRÓXIMAS SALIDAS ---
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Próximas Salidas",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Toca una salida para anotar si asistirás",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                EditorialSectionLabel(
+                    text = "Próximas salidas (${upcomingOutings.size})"
+                )
+            }
+
+            if (upcomingOutings.isEmpty()) {
+                item {
+                    EditorialCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("No hay salidas programadas", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Toca un día del calendario o el botón '+' para crear un nuevo encuentro.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(upcomingOutings, key = { it.id }) { outing ->
+                    EditorialOutingCard(
+                        outing = outing,
+                        currentUserId = currentUserId,
+                        onCardClick = { activeDetailOuting = outing },
+                        onEditClick = {
+                            editingOuting = outing
+                            preselectedDateIso = outing.dateIso
+                            showOutingFormDialog = true
+                        },
+                        onRsvpSelected = { rsvpChoice ->
+                            viewModel.updateOutingRsvp(outing.id, rsvpChoice)
+                        }
                     )
                 }
             }
-
-            // --- 4. PRÓXIMAS SALIDAS CARDS WITH COLOR RULE & QUICK RSVP ---
-            items(upcomingOutings, key = { it.id }) { outing ->
-                OutingCardItem(
-                    outing = outing,
-                    onCardClick = { activeDetailOuting = outing },
-                    onEditClick = {
-                        editingOuting = outing
-                        preselectedDateIso = outing.dateIso
-                        showOutingFormDialog = true
-                    },
-                    onRsvpSelected = { rsvpChoice ->
-                        viewModel.updateOutingRsvp(outing.id, rsvpChoice)
-                    }
-                )
-            }
         }
 
-        // --- 5. BOTTOM-RIGHT SQUARE '+' FAB ---
+        // --- 4. MINIMALIST OBSIDIAN / CHAMPAGNE FAB ---
         FloatingActionButton(
             onClick = {
                 editingOuting = null
@@ -436,16 +447,17 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
             shape = RoundedCornerShape(16.dp),
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 2.dp),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .size(58.dp)
+                .padding(20.dp)
+                .size(54.dp)
                 .testTag("add_outing_fab")
         ) {
             Icon(
                 imageVector = Icons.Default.Add,
                 contentDescription = "Nueva salida",
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(24.dp)
             )
         }
     }
@@ -455,13 +467,10 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
         val freshOuting = outings.firstOrNull { it.id == currentOuting.id } ?: currentOuting
         OutingQuickDetailDialog(
             outing = freshOuting,
+            currentUserId = currentUserId,
             onDismiss = { activeDetailOuting = null },
-            onRsvpChange = { choice ->
-                viewModel.updateOutingRsvp(freshOuting.id, choice)
-            },
-            onStatusChange = { newStatus ->
-                viewModel.updateOutingStatusColor(freshOuting.id, newStatus)
-            },
+            onRsvpChange = { choice -> viewModel.updateOutingRsvp(freshOuting.id, choice) },
+            onStatusChange = { newStatus -> viewModel.updateOutingStatusColor(freshOuting.id, newStatus) },
             onEdit = {
                 activeDetailOuting = null
                 editingOuting = freshOuting
@@ -474,16 +483,15 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                 viewModel.world1Tab.value = "map"
             },
             onNewOutingSameDay = {
-                val dateToUse = freshOuting.dateIso
                 activeDetailOuting = null
                 editingOuting = null
-                preselectedDateIso = dateToUse
+                preselectedDateIso = freshOuting.dateIso
                 showOutingFormDialog = true
             }
         )
     }
 
-    // --- CREATE / EDIT OUTING FORM DIALOG ---
+    // --- CREATE / EDIT OUTING DIALOG ---
     if (showOutingFormDialog) {
         OutingFormDialog(
             initialOuting = editingOuting,
@@ -516,7 +524,7 @@ private fun CalendarDayCell(
     val status = outing?.outingStatus
     Box(
         modifier = modifier
-            .height(48.dp)
+            .height(44.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick)
             .testTag("calendar_day_$dayNumber"),
@@ -526,9 +534,9 @@ private fun CalendarDayCell(
             OutingStatus.CONFIRMED -> {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
-                        .border(2.5.dp, StatusConfirmedOuterRing, CircleShape)
-                        .padding(4.dp)
+                        .size(38.dp)
+                        .border(1.5.dp, StatusConfirmedOuterRing, CircleShape)
+                        .padding(3.dp)
                         .clip(CircleShape)
                         .background(StatusConfirmedGreen),
                     contentAlignment = Alignment.Center
@@ -536,7 +544,7 @@ private fun CalendarDayCell(
                     Text(
                         text = dayNumber.toString(),
                         color = Color.White,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
                     )
                 }
@@ -544,17 +552,16 @@ private fun CalendarDayCell(
             OutingStatus.PLANNED -> {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
-                        .border(1.5.dp, StatusPlannedOuter, CircleShape)
-                        .padding(2.dp)
+                        .size(36.dp)
+                        .border(1.2.dp, StatusPlannedOuter, CircleShape)
                         .clip(CircleShape)
-                        .background(StatusPlannedGray),
+                        .background(StatusPlannedGray.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = dayNumber.toString(),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
                     )
                 }
@@ -562,17 +569,16 @@ private fun CalendarDayCell(
             OutingStatus.CANCELLED -> {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
-                        .border(1.5.dp, StatusCancelledOuter, CircleShape)
-                        .padding(2.dp)
+                        .size(36.dp)
+                        .border(1.2.dp, StatusCancelledOuter, CircleShape)
                         .clip(CircleShape)
-                        .background(StatusCancelledRed),
+                        .background(StatusCancelledRed.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = dayNumber.toString(),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
+                        color = StatusCancelledRed,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
                     )
                 }
@@ -582,16 +588,16 @@ private fun CalendarDayCell(
                     modifier = Modifier
                         .size(34.dp)
                         .then(
-                            if (isToday) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                            if (isToday) Modifier.border(1.dp, MaterialTheme.colorScheme.secondary, CircleShape)
                             else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = dayNumber.toString(),
-                        color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = if (isToday) FontWeight.ExtraBold else FontWeight.Medium,
-                        fontSize = 14.sp
+                        color = if (isToday) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+                        fontWeight = if (isToday) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = 13.sp
                     )
                 }
             }
@@ -599,16 +605,16 @@ private fun CalendarDayCell(
         if (outingsCount > 1) {
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.tertiary,
-                contentColor = MaterialTheme.colorScheme.onTertiary,
+                color = MaterialTheme.colorScheme.secondary,
+                contentColor = MaterialTheme.colorScheme.onSecondary,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 2.dp, end = 2.dp)
             ) {
                 Text(
                     text = "+${outingsCount - 1}",
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Black,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
             }
@@ -625,13 +631,13 @@ private fun CalendarLegendItem(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         if (isDoubleCircle) {
             Box(
                 modifier = Modifier
-                    .size(16.dp)
-                    .border(1.5.dp, outerRingColor, CircleShape)
+                    .size(13.dp)
+                    .border(1.2.dp, outerRingColor, CircleShape)
                     .padding(2.dp)
                     .clip(CircleShape)
                     .background(innerColor)
@@ -639,23 +645,23 @@ private fun CalendarLegendItem(
         } else {
             Box(
                 modifier = Modifier
-                    .size(14.dp)
+                    .size(9.dp)
                     .clip(CircleShape)
                     .background(innerColor)
             )
         }
         Text(
             text = label,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
 @Composable
-private fun OutingCardItem(
+private fun EditorialOutingCard(
     outing: Outing,
+    currentUserId: String?,
     onCardClick: () -> Unit,
     onEditClick: () -> Unit,
     onRsvpSelected: (RsvpChoice) -> Unit
@@ -665,190 +671,101 @@ private fun OutingCardItem(
         OutingStatus.PLANNED -> StatusPlannedGray
         OutingStatus.CANCELLED -> StatusCancelledRed
     }
+    val userRsvp = outing.rsvpChoiceFor(currentUserId)
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onCardClick)
-            .testTag("outing_card_${outing.id}"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(2.dp, statusColor.copy(alpha = 0.65f))
+    EditorialCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onCardClick
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    // Status Circle Indicator matching the calendar rule
-                    if (outing.outingStatus == OutingStatus.CONFIRMED) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .border(2.dp, StatusConfirmedOuterRing, CircleShape)
-                                .padding(3.dp)
-                                .clip(CircleShape)
-                                .background(StatusConfirmedGreen)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(statusColor)
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            text = outing.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${outing.dateIso} • ${outing.time} • ${outing.outingStatus.label}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = statusColor,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    EditorialStatusPill(
+                        label = "${outing.outingStatus.label}  •  ${outing.dateIso}",
+                        color = statusColor,
+                        isDoubleRing = outing.outingStatus == OutingStatus.CONFIRMED
+                    )
+                    Text(
+                        text = outing.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-
-                // Money / Budget Pill
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = statusColor.copy(alpha = 0.14f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Payments,
-                            contentDescription = null,
-                            tint = statusColor,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = outing.budgetPerPerson.ifBlank { "Libre" },
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = statusColor
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = onEditClick,
-                    modifier = Modifier.size(48.dp).testTag("edit_outing_${outing.id}")
-                ) {
+                IconButton(onClick = onEditClick, modifier = Modifier.size(34.dp)) {
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Editar salida",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                EditorialMetaItem(
+                    icon = Icons.Default.LocationOn,
+                    text = "${outing.location}  •  ${outing.time}"
+                )
+                if (outing.meetingPoint.isNotBlank()) {
+                    EditorialMetaItem(
+                        icon = Icons.Default.Handshake,
+                        text = "Encuentro: ${outing.meetingPoint}"
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    EditorialMetaItem(
+                        icon = Icons.Default.Payments,
+                        text = outing.budgetPerPerson.ifBlank { "Sin coste" }
+                    )
+                    if (outing.kitItems.isNotBlank()) {
+                        EditorialMetaItem(
+                            icon = Icons.Default.Backpack,
+                            text = outing.kitItems,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
 
-            // Destination & Meeting point concise info
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            // Sleek Editorial Segmented RSVP Bar (Asistiré | Duda | No)
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(3.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "Lugar: ${outing.location}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-
-            if (outing.meetingPoint.isNotBlank()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Place,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = "Nos encontramos en: ${outing.meetingPoint}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                    )
-                }
-            }
-
-            if (outing.kitItems.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Backpack,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = "Kit de la Quedada: ${outing.kitItems}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Quick 1-Tap Attendance (RSVP) Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                RsvpQuickButton(
-                    text = "Asistiré (${outing.rsvpYesCount})",
-                    selected = outing.rsvpChoice == RsvpChoice.YES,
-                    activeColor = StatusConfirmedGreen,
-                    modifier = Modifier.weight(1f).testTag("rsvp_yes_${outing.id}"),
+                EditorialRsvpSegment(
+                    label = "Asistiré (${outing.rsvpYesCount})",
+                    selected = userRsvp == RsvpChoice.YES,
+                    selectedColor = StatusConfirmedGreen,
+                    modifier = Modifier.weight(1f),
                     onClick = { onRsvpSelected(RsvpChoice.YES) }
                 )
-                RsvpQuickButton(
-                    text = "Duda (${outing.rsvpMaybeCount})",
-                    selected = outing.rsvpChoice == RsvpChoice.MAYBE,
-                    activeColor = StatusPlannedGray,
-                    modifier = Modifier.weight(1f).testTag("rsvp_maybe_${outing.id}"),
+                EditorialRsvpSegment(
+                    label = "Duda (${outing.rsvpMaybeCount})",
+                    selected = userRsvp == RsvpChoice.MAYBE,
+                    selectedColor = StatusPlannedGray,
+                    modifier = Modifier.weight(1f),
                     onClick = { onRsvpSelected(RsvpChoice.MAYBE) }
                 )
-                RsvpQuickButton(
-                    text = "No voy (${outing.rsvpNoCount})",
-                    selected = outing.rsvpChoice == RsvpChoice.NO,
-                    activeColor = StatusCancelledRed,
-                    modifier = Modifier.weight(1f).testTag("rsvp_no_${outing.id}"),
+                EditorialRsvpSegment(
+                    label = "No (${outing.rsvpNoCount})",
+                    selected = userRsvp == RsvpChoice.NO,
+                    selectedColor = StatusCancelledRed,
+                    modifier = Modifier.weight(1f),
                     onClick = { onRsvpSelected(RsvpChoice.NO) }
                 )
             }
@@ -857,26 +774,25 @@ private fun OutingCardItem(
 }
 
 @Composable
-private fun RsvpQuickButton(
-    text: String,
+private fun EditorialRsvpSegment(
+    label: String,
     selected: Boolean,
-    activeColor: Color,
+    selectedColor: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) activeColor else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) selectedColor else Color.Transparent,
         contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.height(48.dp)
+        modifier = modifier.height(36.dp)
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
             Text(
-                text = text,
-                fontSize = 11.sp,
-                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1
             )
         }
@@ -886,6 +802,7 @@ private fun RsvpQuickButton(
 @Composable
 fun OutingQuickDetailDialog(
     outing: Outing,
+    currentUserId: String?,
     onDismiss: () -> Unit,
     onRsvpChange: (RsvpChoice) -> Unit,
     onStatusChange: (OutingStatus) -> Unit,
@@ -898,131 +815,82 @@ fun OutingQuickDetailDialog(
         OutingStatus.PLANNED -> StatusPlannedGray
         OutingStatus.CANCELLED -> StatusCancelledRed
     }
+    val userRsvp = outing.rsvpChoiceFor(currentUserId)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Column {
-                Text(
-                    text = outing.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Black
-                )
-                Text(
-                    text = "${outing.dateIso} a las ${outing.time} • ${outing.outingStatus.label}",
-                    style = MaterialTheme.typography.labelMedium,
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                EditorialStatusPill(
+                    label = "${outing.outingStatus.label} • ${outing.dateIso} ${outing.time}",
                     color = statusColor,
-                    fontWeight = FontWeight.Bold
+                    isDoubleRing = outing.outingStatus == OutingStatus.CONFIRMED
                 )
+                Text(text = outing.title, style = MaterialTheme.typography.titleLarge)
             }
         },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("📍 Lugar de la salida: ${outing.location}", fontWeight = FontWeight.SemiBold)
+                EditorialMetaItem(icon = Icons.Default.LocationOn, text = outing.location)
                 if (outing.meetingPoint.isNotBlank()) {
-                    Text("🤝 Punto de encuentro: ${outing.meetingPoint}")
+                    EditorialMetaItem(icon = Icons.Default.Handshake, text = "Punto de encuentro: ${outing.meetingPoint}")
                 }
-                Text("💶 Dinero a llevar: ${outing.budgetPerPerson.ifBlank { "No especificado" }}", fontWeight = FontWeight.Bold)
+                EditorialMetaItem(icon = Icons.Default.Payments, text = "Presupuesto: ${outing.budgetPerPerson.ifBlank { "No especificado" }}")
                 if (outing.kitItems.isNotBlank()) {
-                    Text("🎒 Kit de la Quedada (Qué llevar): ${outing.kitItems}")
+                    EditorialMetaItem(icon = Icons.Default.Backpack, text = "Kit: ${outing.kitItems}")
                 }
                 if (outing.additionalInfo.isNotBlank()) {
-                    Text("ℹ️ Información adicional: ${outing.additionalInfo}")
-                }
-
-                HorizontalDivider()
-
-                Text(
-                    text = "¿Vas a asistir a esta salida?",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    RsvpQuickButton(
-                        text = "✅ Asistiré (${outing.rsvpYesCount})",
-                        selected = outing.rsvpChoice == RsvpChoice.YES,
-                        activeColor = StatusConfirmedGreen,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onRsvpChange(RsvpChoice.YES) }
-                    )
-                    RsvpQuickButton(
-                        text = "🤔 Aún no lo tengo claro (${outing.rsvpMaybeCount})",
-                        selected = outing.rsvpChoice == RsvpChoice.MAYBE,
-                        activeColor = StatusPlannedGray,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onRsvpChange(RsvpChoice.MAYBE) }
-                    )
-                    RsvpQuickButton(
-                        text = "❌ No asistiré (${outing.rsvpNoCount})",
-                        selected = outing.rsvpChoice == RsvpChoice.NO,
-                        activeColor = StatusCancelledRed,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onRsvpChange(RsvpChoice.NO) }
+                    Text(
+                        text = outing.additionalInfo,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                Text(
-                    text = "Cambiar color / estado en el calendario:",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { onStatusChange(OutingStatus.CONFIRMED) },
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Text("🟢 Sí", fontSize = 11.sp)
+                Text("Tu asistencia", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    EditorialRsvpSegment("Asistiré", userRsvp == RsvpChoice.YES, StatusConfirmedGreen, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.YES) }
+                    EditorialRsvpSegment("Duda", userRsvp == RsvpChoice.MAYBE, StatusPlannedGray, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.MAYBE) }
+                    EditorialRsvpSegment("No", userRsvp == RsvpChoice.NO, StatusCancelledRed, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.NO) }
+                }
+
+                Text("Estado en el calendario", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { onStatusChange(OutingStatus.CONFIRMED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                        Text("Confirmada", fontSize = 11.sp)
                     }
-                    OutlinedButton(
-                        onClick = { onStatusChange(OutingStatus.PLANNED) },
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Text("⚪ Pensada", fontSize = 11.sp)
+                    OutlinedButton(onClick = { onStatusChange(OutingStatus.PLANNED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                        Text("Pensada", fontSize = 11.sp)
                     }
-                    OutlinedButton(
-                        onClick = { onStatusChange(OutingStatus.CANCELLED) },
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Text("🔴 No", fontSize = 11.sp)
+                    OutlinedButton(onClick = { onStatusChange(OutingStatus.CANCELLED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                        Text("Cancelada", fontSize = 11.sp)
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilledTonalButton(
-                        onClick = onOpenOnMap,
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Text("Ver en Mapa 🗺️", fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onOpenOnMap, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Ver mapa", fontSize = 12.sp)
                     }
-                    FilledTonalButton(
-                        onClick = onNewOutingSameDay,
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Text("+ Otra este día", fontSize = 12.sp)
+                    OutlinedButton(onClick = onNewOutingSameDay, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Otra hoy", fontSize = 12.sp)
                     }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onEdit) {
-                Text("Editar Salida")
-            }
+            Button(onClick = onEdit) { Text("Editar") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cerrar")
-            }
+            TextButton(onClick = onDismiss) { Text("Cerrar") }
         }
     )
 }
@@ -1037,75 +905,62 @@ fun OutingFormDialog(
     onSave: (Outing) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
+    val pickerContext = LocalContext.current
     var title by remember { mutableStateOf(initialOuting?.title ?: "") }
     var location by remember { mutableStateOf(initialOuting?.location ?: "") }
     var meetingPoint by remember { mutableStateOf(initialOuting?.meetingPoint ?: "") }
     var time by remember { mutableStateOf(initialOuting?.time ?: "20:00") }
     var dateIso by remember { mutableStateOf(initialOuting?.dateIso ?: defaultDateIso) }
-    var selectedStatus by remember {
-        mutableStateOf(initialOuting?.outingStatus ?: OutingStatus.CONFIRMED)
-    }
-    var budget by remember {
-        mutableStateOf(initialOuting?.budgetPerPerson ?: "15 $defaultCurrency")
-    }
+    var selectedStatus by remember { mutableStateOf(initialOuting?.outingStatus ?: OutingStatus.CONFIRMED) }
+    var budget by remember { mutableStateOf(initialOuting?.budgetPerPerson ?: "15 $defaultCurrency") }
     var kitItems by remember { mutableStateOf(initialOuting?.kitItems ?: "") }
     var additionalInfo by remember { mutableStateOf(initialOuting?.additionalInfo ?: "") }
-    var selectedPhotoPreset by remember {
-        mutableStateOf(initialOuting?.placePhotoUrl ?: "preset_bowling")
-    }
+    var selectedPhotoPreset by remember { mutableStateOf(initialOuting?.placePhotoUrl ?: "preset_bowling") }
 
     val photoPresets = listOf(
-        "preset_bowling" to "🎳 Bolera / Ocio",
-        "preset_mountain" to "🏔️ Naturaleza",
-        "preset_cinema" to "🍿 Cine / Teatro",
-        "preset_escape" to "🕵️ Escape / Juegos",
-        "preset_beach" to "🏖️ Playa / Piscina",
-        "preset_plaza" to "🍕 Cena / Centro"
+        "preset_bowling" to "Ocio",
+        "preset_mountain" to "Naturaleza",
+        "preset_cinema" to "Cine",
+        "preset_escape" to "Juegos",
+        "preset_beach" to "Costa",
+        "preset_plaza" to "Gastronomía"
     )
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = if (initialOuting == null) "Nueva Salida" else "Editar Salida",
-                fontWeight = FontWeight.Black
+                text = if (initialOuting == null) "Nueva salida" else "Editar salida",
+                style = MaterialTheme.typography.titleLarge
             )
         },
         text = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Nombre de la salida") },
-                    placeholder = { Text("Ej: Cena y Bolera de Grupo") },
+                    label = { Text("Título") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("outing_form_title_input")
                 )
-
                 OutlinedTextField(
                     value = location,
                     onValueChange = { location = it },
-                    label = { Text("Lugar (A dónde iremos)") },
-                    placeholder = { Text("Ej: Centro Comercial Norte") },
+                    label = { Text("Lugar") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("outing_form_location_input")
                 )
-
                 OutlinedTextField(
                     value = meetingPoint,
                     onValueChange = { meetingPoint = it },
-                    label = { Text("Punto de encuentro (Dónde nos vemos)") },
-                    placeholder = { Text("Ej: Entrada principal junto a la fuente") },
+                    label = { Text("Punto de encuentro") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                val pickerContext = androidx.compose.ui.platform.LocalContext.current
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1115,7 +970,7 @@ fun OutingFormDialog(
                             val parts = time.split(":")
                             val initH = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 20
                             val initM = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
-                            android.app.TimePickerDialog(
+                            TimePickerDialog(
                                 pickerContext,
                                 { _, h, m -> time = "%02d:%02d".format(h, m) },
                                 initH,
@@ -1123,11 +978,12 @@ fun OutingFormDialog(
                                 true
                             ).show()
                         },
-                        modifier = Modifier.weight(1f).height(54.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(48.dp)
                     ) {
-                        Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(time.ifBlank { "20:00" }, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(time.ifBlank { "20:00" }, style = MaterialTheme.typography.labelMedium)
                     }
 
                     OutlinedButton(
@@ -1137,7 +993,7 @@ fun OutingFormDialog(
                             val initY = parts.getOrNull(0)?.toIntOrNull() ?: cal.get(Calendar.YEAR)
                             val initM = (parts.getOrNull(1)?.toIntOrNull() ?: (cal.get(Calendar.MONTH) + 1)) - 1
                             val initD = parts.getOrNull(2)?.toIntOrNull() ?: cal.get(Calendar.DAY_OF_MONTH)
-                            android.app.DatePickerDialog(
+                            DatePickerDialog(
                                 pickerContext,
                                 { _, y, m, d -> dateIso = "%04d-%02d-%02d".format(y, m + 1, d) },
                                 initY,
@@ -1145,75 +1001,51 @@ fun OutingFormDialog(
                                 initD.coerceIn(1, 31)
                             ).show()
                         },
-                        modifier = Modifier.weight(1.35f).height(54.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1.35f).height(48.dp)
                     ) {
-                        Text("📅 ${dateIso.ifBlank { defaultDateIso }}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.CalendarToday, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(dateIso.ifBlank { defaultDateIso }, style = MaterialTheme.typography.labelMedium)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "Color y Estado en el Calendario y Mapa:",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusChoiceRow(
-                        label = "🟢 Confirmada (Doble círculo verde)",
-                        selected = selectedStatus == OutingStatus.CONFIRMED,
-                        color = StatusConfirmedGreen,
-                        onClick = { selectedStatus = OutingStatus.CONFIRMED }
-                    )
-                    StatusChoiceRow(
-                        label = "⚪ Pensada / Por confirmar (Círculo gris)",
-                        selected = selectedStatus == OutingStatus.PLANNED,
-                        color = StatusPlannedGray,
-                        onClick = { selectedStatus = OutingStatus.PLANNED }
-                    )
-                    StatusChoiceRow(
-                        label = "🔴 Cancelada (Círculo rojo)",
-                        selected = selectedStatus == OutingStatus.CANCELLED,
-                        color = StatusCancelledRed,
-                        onClick = { selectedStatus = OutingStatus.CANCELLED }
-                    )
+                Text("Estado", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    StatusChoiceChip("Confirmada", selectedStatus == OutingStatus.CONFIRMED, StatusConfirmedGreen, Modifier.weight(1f)) {
+                        selectedStatus = OutingStatus.CONFIRMED
+                    }
+                    StatusChoiceChip("Pensada", selectedStatus == OutingStatus.PLANNED, StatusPlannedGray, Modifier.weight(1f)) {
+                        selectedStatus = OutingStatus.PLANNED
+                    }
+                    StatusChoiceChip("Cancelada", selectedStatus == OutingStatus.CANCELLED, StatusCancelledRed, Modifier.weight(1f)) {
+                        selectedStatus = OutingStatus.CANCELLED
+                    }
                 }
-
-                Spacer(modifier = Modifier.height(4.dp))
 
                 OutlinedTextField(
                     value = budget,
                     onValueChange = { budget = it },
-                    label = { Text("¿Cuánto dinero hay que llevar?") },
-                    placeholder = { Text("Ej: 15 € por persona") },
+                    label = { Text("Presupuesto estimado") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("outing_form_budget_input")
                 )
-
                 OutlinedTextField(
                     value = kitItems,
                     onValueChange = { kitItems = it },
-                    label = { Text("Kit de la Quedada (¿Qué llevar?)") },
-                    placeholder = { Text("Ej: Ropa cómoda, agua, entradas, batería...") },
+                    label = { Text("Kit / Qué llevar") },
                     maxLines = 2,
                     modifier = Modifier.fillMaxWidth().testTag("outing_form_kit_input")
                 )
-
                 OutlinedTextField(
                     value = additionalInfo,
                     onValueChange = { additionalInfo = it },
-                    label = { Text("Información adicional") },
-                    placeholder = { Text("Detalles, reservas, transporte...") },
+                    label = { Text("Notas adicionales") },
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Text(
-                    text = "Foto / Icono del lugar para el Mapa:",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Text("Categoría visual", style = MaterialTheme.typography.labelMedium)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1222,30 +1054,29 @@ fun OutingFormDialog(
                         val isSel = selectedPhotoPreset == key
                         Surface(
                             onClick = { selectedPhotoPreset = key },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(999.dp),
                             color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                         ) {
                             Text(
                                 text = label,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
                     }
                 }
 
                 if (onDelete != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
                     OutlinedButton(
                         onClick = onDelete,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusCancelledRed),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                        border = BorderStroke(1.dp, StatusCancelledRed.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth().height(44.dp)
                     ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Eliminar esta salida")
+                        Text("Eliminar salida")
                     }
                 }
             }
@@ -1256,9 +1087,9 @@ fun OutingFormDialog(
                     val base = initialOuting ?: Outing()
                     onSave(
                         base.copy(
-                            title = title.ifBlank { "Salida del Grupo" },
+                            title = title.ifBlank { "Salida del grupo" },
                             location = location.ifBlank { "Centro" },
-                            meetingPoint = meetingPoint.ifBlank { "Entrada Principal" },
+                            meetingPoint = meetingPoint.ifBlank { "Entrada principal" },
                             time = time.ifBlank { "20:00" },
                             dateIso = dateIso.ifBlank { defaultDateIso },
                             status = selectedStatus.name,
@@ -1271,41 +1102,32 @@ fun OutingFormDialog(
                 },
                 modifier = Modifier.testTag("outing_form_save_button")
             ) {
-                Text("Guardar en Calendario")
+                Text("Guardar")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancelar")
-            }
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
 }
 
 @Composable
-private fun StatusChoiceRow(
+private fun StatusChoiceChip(
     label: String,
     selected: Boolean,
     color: Color,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) color.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) color else Color.Transparent),
-        modifier = Modifier.fillMaxWidth().height(48.dp)
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) color else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.height(38.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                color = if (selected) color else MaterialTheme.colorScheme.onSurface,
-                fontSize = 13.sp
-            )
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
         }
     }
 }

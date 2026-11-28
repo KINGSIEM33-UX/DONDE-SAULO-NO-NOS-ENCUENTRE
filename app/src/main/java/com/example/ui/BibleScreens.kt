@@ -643,9 +643,9 @@ fun BibleReaderScreen(
                                         Text(
                                             text = "${verse.number}",
                                             fontSize = (textSizeSp * 0.72f).sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.width(28.dp).padding(top = 2.dp)
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.width(28.dp).padding(top = 3.dp)
                                         )
                                         Text(
                                             text = highlightQuery(verse.text, if (isSearchActive) searchQuery else ""),

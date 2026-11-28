@@ -380,38 +380,34 @@ fun World1ChatScreen(viewModel: MainViewModel) {
             .background(MaterialTheme.colorScheme.background)
             .testTag("group_social_chat_screen")
     ) {
-        // --- 1. CHAT HEADER ---
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp,
-            modifier = Modifier.fillMaxWidth()
+        // --- 1. EDITORIAL CHAT HEADER ---
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("💬", fontSize = 20.sp)
-                    }
+                    EditorialIconBadge(
+                        icon = Icons.Default.ShareLocation,
+                        size = 40.dp,
+                        iconTint = MaterialTheme.colorScheme.secondary
+                    )
                     Column {
                         Text(
                             text = profile.groupName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -419,36 +415,37 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
+                                    .size(7.dp)
                                     .clip(CircleShape)
                                     .background(StatusConfirmedGreen)
                             )
                             Text(
-                                text = "${members.size} miembros • Código ${profile.groupInviteCode}",
+                                text = "${members.size} miembros  •  ${profile.groupInviteCode}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
 
-                // Quick share active outing card to chat
                 outings.firstOrNull()?.let { nextOuting ->
                     IconButton(
                         onClick = { viewModel.shareOutingToGroupChat(nextOuting) },
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.secondaryContainer)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                     ) {
                         Icon(
                             imageVector = Icons.Default.ShareLocation,
                             contentDescription = "Compartir próxima salida",
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
+            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
 
         // Status banner for voice/dictation feedback

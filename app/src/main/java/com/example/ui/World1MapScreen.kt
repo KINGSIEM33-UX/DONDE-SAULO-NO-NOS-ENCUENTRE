@@ -1063,18 +1063,23 @@ fun PlacePhotoThumbnail(
         return
     }
 
-    val (gradient, emoji) = when (photoKey) {
-        "preset_bowling" -> listOf(Color(0xFF7C3AED), Color(0xFFEC4899)) to "🎳"
-        "preset_mountain" -> listOf(Color(0xFF059669), Color(0xFF34D399)) to "🏔️"
-        "preset_cinema" -> listOf(Color(0xFFDC2626), Color(0xFFF59E0B)) to "🍿"
-        "preset_escape" -> listOf(Color(0xFF1D4ED8), Color(0xFF06B6D4)) to "🕵️"
-        "preset_beach" -> listOf(Color(0xFF0284C7), Color(0xFFFDE047)) to "🏖️"
-        else -> listOf(Color(0xFFEA580C), Color(0xFFF43F5E)) to "🍕"
+    val (bg, icon) = when (photoKey) {
+        "preset_bowling" -> Color(0xFF23201B) to Icons.Default.Place
+        "preset_mountain" -> Color(0xFF1A2E26) to Icons.Default.Map
+        "preset_cinema" -> Color(0xFF2E1E1E) to Icons.Default.LocationOn
+        "preset_escape" -> Color(0xFF1B2330) to Icons.Default.Place
+        "preset_beach" -> Color(0xFF1A2930) to Icons.Default.LocationOn
+        else -> Color(0xFF28231D) to Icons.Default.Place
     }
     Box(
-        modifier = modifier.background(Brush.linearGradient(gradient)),
+        modifier = modifier.background(bg),
         contentAlignment = Alignment.Center
     ) {
-        Text(text = emoji, fontSize = 20.sp)
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = Color(0xFFDFC8A2),
+            modifier = Modifier.size(20.dp)
+        )
     }
 }

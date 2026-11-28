@@ -334,19 +334,7 @@ fun MainAppScreen(viewModel: MainViewModel) {
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .drawBehind {
-                            if (isDarkWorld2) {
-                                drawRect(color = bgColor)
-                            } else {
-                                drawRect(
-                                    brush = Brush.linearGradient(
-                                        colors = listOf(Color(0xFF67B8D6), Color(0xFF7EE1B7)),
-                                        start = Offset(0f, 0f),
-                                        end = Offset(size.width, size.height)
-                                    )
-                                )
-                            }
-                        }
+                        .background(MaterialTheme.colorScheme.background)
                 ) {
                     when (activeTab) {
                         "calendar" -> CalendarScreen(viewModel = viewModel)
@@ -408,7 +396,6 @@ fun World1MainContainer(
     currentTab: String,
     onTabSelected: (String) -> Unit
 ) {
-    // Handle system back from secondary tabs to return to profile (main tab)
     if (currentTab != "profile") {
         BackHandler {
             onTabSelected("profile")
@@ -472,41 +459,53 @@ fun World1BottomBar(
     currentTab: String,
     onTabSelected: (String) -> Unit
 ) {
-    NavigationBar(
-        modifier = Modifier
-            .testTag("world1_bottom_nav_bar")
-            .navigationBarsPadding(),
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp
-    ) {
-        val items = listOf(
-            Triple("profile", "Inicio", Icons.Default.Person),
-            Triple("outings", "Salidas", Icons.Default.DateRange),
-            Triple("map", "Mapa", Icons.Default.Explore),
-            Triple("chat", "Chat", Icons.Default.ChatBubble),
-            Triple("games", "Juegos", Icons.Default.SportsEsports)
-        )
-
-        items.forEach { (tab, label, icon) ->
-            val selected = currentTab == tab
-            NavigationBarItem(
-                selected = selected,
-                onClick = { onTabSelected(tab) },
-                icon = {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = label
-                    )
-                },
-                label = {
-                    Text(
-                        text = label,
-                        fontSize = 11.sp,
-                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
-                    )
-                },
-                modifier = Modifier.testTag("world1_tab_$tab")
+    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.75.dp)
+        NavigationBar(
+            modifier = Modifier
+                .testTag("world1_bottom_nav_bar")
+                .navigationBarsPadding(),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp
+        ) {
+            val items = listOf(
+                Triple("profile", "Inicio", Icons.Default.Person),
+                Triple("outings", "Salidas", Icons.Default.DateRange),
+                Triple("map", "Mapa", Icons.Default.Explore),
+                Triple("chat", "Chat", Icons.Default.ChatBubble),
+                Triple("games", "Juegos", Icons.Default.SportsEsports)
             )
+            val navColors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedTextColor = MaterialTheme.colorScheme.primary,
+                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            items.forEach { (tab, label, icon) ->
+                val selected = currentTab == tab
+                NavigationBarItem(
+                    selected = selected,
+                    onClick = { onTabSelected(tab) },
+                    colors = navColors,
+                    icon = {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = label,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    },
+                    modifier = Modifier.testTag("world1_tab_$tab")
+                )
+            }
         }
     }
 }
@@ -533,8 +532,8 @@ fun World1NavigationRail(
             NavigationRailItem(
                 selected = selected,
                 onClick = { onTabSelected(tab) },
-                icon = { Icon(icon, contentDescription = label) },
-                label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                icon = { Icon(icon, contentDescription = label, modifier = Modifier.size(21.dp)) },
+                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                 modifier = Modifier.padding(vertical = 6.dp)
             )
         }
@@ -548,42 +547,55 @@ fun World1NavigationRail(
 
 @Composable
 fun TabBottomBar(activeTab: String, onTabSelected: (String) -> Unit) {
-    NavigationBar(
-        modifier = Modifier
-            .testTag("bottom_nav_bar")
-            .navigationBarsPadding()
-            .border(2.dp, MaterialTheme.colorScheme.outline),
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp
-    ) {
-        NavigationBarItem(
-            selected = activeTab == "calendar",
-            onClick = { onTabSelected("calendar") },
-            icon = { Icon(Icons.Default.DateRange, contentDescription = "Calendario") },
-            label = { Text("Calendario", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-            modifier = Modifier.testTag("tab_calendar")
-        )
-        NavigationBarItem(
-            selected = activeTab == "library",
-            onClick = { onTabSelected("library") },
-            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Sagrarios de Estudio") },
-            label = { Text("Estudio", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-            modifier = Modifier.testTag("tab_library")
-        )
-        NavigationBarItem(
-            selected = activeTab == "trivia",
-            onClick = { onTabSelected("trivia") },
-            icon = { Icon(Icons.Default.Star, contentDescription = "Trivia de Fe") },
-            label = { Text("Conocimiento", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-            modifier = Modifier.testTag("tab_trivia")
-        )
-        NavigationBarItem(
-            selected = activeTab == "settings",
-            onClick = { onTabSelected("settings") },
-            icon = { Icon(Icons.Default.Settings, contentDescription = "Personalización") },
-            label = { Text("Ajustes", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-            modifier = Modifier.testTag("tab_settings")
-        )
+    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.75.dp)
+        NavigationBar(
+            modifier = Modifier
+                .testTag("bottom_nav_bar")
+                .navigationBarsPadding(),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp
+        ) {
+            val navColors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedTextColor = MaterialTheme.colorScheme.primary,
+                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            NavigationBarItem(
+                selected = activeTab == "calendar",
+                onClick = { onTabSelected("calendar") },
+                colors = navColors,
+                icon = { Icon(Icons.Default.DateRange, contentDescription = "Agenda", modifier = Modifier.size(21.dp)) },
+                label = { Text("Agenda", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.testTag("tab_calendar")
+            )
+            NavigationBarItem(
+                selected = activeTab == "library",
+                onClick = { onTabSelected("library") },
+                colors = navColors,
+                icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Estudio", modifier = Modifier.size(21.dp)) },
+                label = { Text("Estudio", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.testTag("tab_library")
+            )
+            NavigationBarItem(
+                selected = activeTab == "trivia",
+                onClick = { onTabSelected("trivia") },
+                colors = navColors,
+                icon = { Icon(Icons.Default.Star, contentDescription = "Conocimiento", modifier = Modifier.size(21.dp)) },
+                label = { Text("Conocimiento", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.testTag("tab_trivia")
+            )
+            NavigationBarItem(
+                selected = activeTab == "settings",
+                onClick = { onTabSelected("settings") },
+                colors = navColors,
+                icon = { Icon(Icons.Default.Settings, contentDescription = "Ajustes", modifier = Modifier.size(21.dp)) },
+                label = { Text("Ajustes", style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.testTag("tab_settings")
+            )
+        }
     }
 }
 
@@ -688,19 +700,17 @@ fun LibraryScreen(
             // Study Feed Grid / List
             val scrollState = rememberScrollState()
             Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(scrollState)) {
-            // Elegant Header
+            // Editorial Header
             Text(
-                text = "Aprendizaje",
+                text = "Estudio Bíblico",
                 style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Black,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 20.dp, bottom = 4.dp),
-                fontFamily = FontFamily.Serif
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)
             )
             Text(
                 text = "«Se fue renovando a imagen de su Creador»",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontStyle = FontStyle.Italic,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
@@ -848,7 +858,7 @@ fun LibraryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -895,7 +905,7 @@ fun LibraryScreen(
                     .fillMaxWidth()
                     .height(56.dp)
                     .padding(vertical = 8.dp)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -1014,7 +1024,7 @@ fun BibleSectionCard(item: BibleSection, onClick: () -> Unit, viewModel: MainVie
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .testTag("bible_item_card_${item.id}")
-            .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -1869,7 +1879,7 @@ fun GeminiChatScreen(viewModel: MainViewModel) {
                     .weight(1f)
                     .height(56.dp)
                     .testTag("chat_input_text")
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(28.dp)),
                 shape = RoundedCornerShape(28.dp),
                 enabled = !isBusy,
                 singleLine = true,
@@ -1960,7 +1970,7 @@ fun TriviaAchievementsScreen(viewModel: MainViewModel, points: Int, streak: Int)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2095,7 +2105,7 @@ fun TriviaAchievementsScreen(viewModel: MainViewModel, points: Int, streak: Int)
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2250,7 +2260,7 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2278,7 +2288,7 @@ fun SettingsScreen(
                                     .background(
                                         if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
                                     )
-                                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
                                     .clickable { viewModel.updateThemeMode(mode) },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -2306,7 +2316,7 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2389,7 +2399,7 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2411,7 +2421,7 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp)
-                                .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                             shape = RoundedCornerShape(24.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surface,
@@ -2442,7 +2452,7 @@ fun SettingsScreen(
                             onDismissRequest = { expanded = false },
                             modifier = Modifier
                                 .background(MaterialTheme.colorScheme.surface)
-                                .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                         ) {
                             listOf("RVR1960", "NTV", "NVI", "LBLA", "DHH").forEach { v ->
                                 androidx.compose.material3.DropdownMenuItem(
@@ -2464,7 +2474,7 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(24.dp)
             ) {
@@ -2595,7 +2605,7 @@ fun FavoritesScreen(viewModel: MainViewModel) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)),
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         shape = RoundedCornerShape(24.dp)
                     ) {

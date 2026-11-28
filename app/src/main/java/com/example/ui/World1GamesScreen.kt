@@ -85,79 +85,80 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Grid4x4
+import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.TheaterComedy
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Whatshot
+import androidx.compose.ui.graphics.vector.ImageVector
+
 private data class MiniGameMeta(
     val id: String,
     val title: String,
-    val emoji: String,
+    val icon: ImageVector,
     val subtitle: String,
-    val badge: String,
-    val colors: List<Color>
+    val badge: String
 )
 
 private val MINI_GAMES_LIST = listOf(
     MiniGameMeta(
         id = "impostor",
         title = "El Impostor",
-        emoji = "🕵️‍♂️",
-        subtitle = "Descubre quién del grupo no sabe la palabra secreta",
-        badge = "Grupo 3-10J",
-        colors = listOf(Color(0xFFEF4444), Color(0xFFF97316))
+        icon = Icons.Default.VisibilityOff,
+        subtitle = "Descubre quién no conoce la palabra secreta",
+        badge = "3–10 J"
     ),
     MiniGameMeta(
         id = "2048",
         title = "2048 Arcade",
-        emoji = "🔢",
-        subtitle = "Desliza y fusiona fichas hasta alcanzar el 2048",
-        badge = "Swipe",
-        colors = listOf(Color(0xFFF59E0B), Color(0xFFEAB308))
+        icon = Icons.Default.Grid4x4,
+        subtitle = "Desliza y fusiona fichas hasta 2048",
+        badge = "Lógica"
     ),
     MiniGameMeta(
         id = "charadas",
         title = "Charadas 60s",
-        emoji = "🎭",
-        subtitle = "Actúa o describe sin decir la palabra antes de que acabe el tiempo",
-        badge = "Fiesta",
-        colors = listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))
+        icon = Icons.Default.TheaterComedy,
+        subtitle = "Actúa o describe antes de que acabe el reloj",
+        badge = "Grupo"
     ),
     MiniGameMeta(
         id = "verdad_reto",
-        title = "Verdad o Reto IA",
-        emoji = "🔥",
-        subtitle = "Preguntas y retos con generador Gemini IA en vivo",
-        badge = "Con IA",
-        colors = listOf(Color(0xFFEC4899), Color(0xFFF43F5E))
+        title = "Verdad o Reto",
+        icon = Icons.Default.Whatshot,
+        subtitle = "Preguntas y retos con generador Gemini IA",
+        badge = "Con IA"
     ),
     MiniGameMeta(
         id = "trivia",
         title = "Trivia Relámpago",
-        emoji = "⚡",
-        subtitle = "10 preguntas rápidas de cultura general para sumar puntos",
-        badge = "Rápido",
-        colors = listOf(Color(0xFF06B6D4), Color(0xFF3B82F6))
+        icon = Icons.Default.Bolt,
+        subtitle = "10 preguntas rápidas de cultura general",
+        badge = "10 Rondas"
     ),
     MiniGameMeta(
         id = "tictactoe",
         title = "Tres en Raya",
-        emoji = "❌⭕",
-        subtitle = "Duelo clásico 2 jugadores o contra la IA invencible",
-        badge = "2J / IA",
-        colors = listOf(Color(0xFF10B981), Color(0xFF14B8A6))
+        icon = Icons.Default.GridOn,
+        subtitle = "Duelo clásico 2 jugadores o contra la IA",
+        badge = "2J / IA"
     ),
     MiniGameMeta(
         id = "memory",
         title = "Memoria Express",
-        emoji = "🧠",
-        subtitle = "Encuentra las 6 parejas ocultas en el menor número de intentos",
-        badge = "Cerebro",
-        colors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))
+        icon = Icons.Default.Psychology,
+        subtitle = "Encuentra las 6 parejas ocultas",
+        badge = "Memoria"
     ),
     MiniGameMeta(
         id = "ruleta",
         title = "Ruleta del Grupo",
-        emoji = "🎡",
-        subtitle = "Ruleta animada para decidir quién paga o qué hacer hoy",
-        badge = "Azar",
-        colors = listOf(Color(0xFF0EA5E9), Color(0xFF6366F1))
+        icon = Icons.Default.Casino,
+        subtitle = "Decide al azar entre opciones o miembros",
+        badge = "Azar"
     )
 )
 
@@ -167,7 +168,6 @@ fun World1GamesScreen(viewModel: MainViewModel) {
     val members by viewModel.groupMembers.collectAsState()
     var activeGameId by remember { mutableStateOf<String?>(null) }
 
-    // Intercept system back button inside any active mini-game to return to the hub
     BackHandler(enabled = activeGameId != null) {
         activeGameId = null
     }
@@ -182,43 +182,44 @@ fun World1GamesScreen(viewModel: MainViewModel) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
                     Text(
-                        text = "Sala de Mini-Juegos 🎮",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Black
+                        text = "Juegos",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "8 juegos completos para animar tus quedadas",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+                        text = "8 dinámicas diseñadas para tus encuentros",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             Icons.Default.EmojiEvents,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "${profile.gamesHighScore} pts",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -226,66 +227,61 @@ fun World1GamesScreen(viewModel: MainViewModel) {
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 28.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(MINI_GAMES_LIST, key = { it.id }) { game ->
-                    Card(
+                    EditorialCard(
                         onClick = { activeGameId = game.id },
-                        shape = RoundedCornerShape(22.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(172.dp)
+                            .height(164.dp)
                             .testTag("game_card_${game.id}")
                     ) {
-                        Box(
+                        Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Brush.linearGradient(game.colors))
-                                .padding(14.dp)
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.SpaceBetween
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                EditorialIconBadge(
+                                    icon = game.icon,
+                                    size = 38.dp,
+                                    iconTint = MaterialTheme.colorScheme.secondary
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
                                 ) {
-                                    Text(text = game.emoji, fontSize = 32.sp)
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = Color.White.copy(alpha = 0.25f)
-                                    ) {
-                                        Text(
-                                            text = game.badge,
-                                            color = Color.White,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                        )
-                                    }
+                                    Text(
+                                        text = game.badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
                                 }
+                            }
 
-                                Column {
-                                    Text(
-                                        text = game.title,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 16.sp
-                                    )
-                                    Text(
-                                        text = game.subtitle,
-                                        color = Color.White.copy(alpha = 0.9f),
-                                        fontSize = 11.sp,
-                                        lineHeight = 14.sp,
-                                        maxLines = 2
-                                    )
-                                }
+                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(
+                                    text = game.title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = game.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2
+                                )
                             }
                         }
                     }
@@ -293,25 +289,28 @@ fun World1GamesScreen(viewModel: MainViewModel) {
             }
         } else {
             val activeMeta = MINI_GAMES_LIST.first { it.id == activeGameId }
-            Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     IconButton(
                         onClick = { activeGameId = null },
-                        modifier = Modifier.size(48.dp).testTag("game_back_to_hub_btn")
+                        modifier = Modifier.size(42.dp).testTag("game_back_to_hub_btn")
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver a juegos")
                     }
+                    EditorialIconBadge(icon = activeMeta.icon, size = 34.dp, iconTint = MaterialTheme.colorScheme.secondary)
                     Text(
-                        text = "${activeMeta.emoji} ${activeMeta.title}",
+                        text = activeMeta.title,
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
+                androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
 
             Box(

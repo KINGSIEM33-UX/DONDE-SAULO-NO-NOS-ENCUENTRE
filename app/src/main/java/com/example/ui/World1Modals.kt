@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -654,9 +655,9 @@ fun CameraAndStoriesModal(
 
 private fun storyFilterBrush(filterStyle: String): Brush {
     return when (filterStyle) {
-        "GOLDEN_SUNSET" -> Brush.linearGradient(listOf(Color(0xFFF97316), Color(0xFFEC4899), Color(0xFF7C3AED)))
-        "CYBER_RETRO" -> Brush.linearGradient(listOf(Color(0xFF0EA5E9), Color(0xFF6366F1), Color(0xFF1E1B4B)))
-        else -> Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFFEC4899), Color(0xFFF59E0B)))
+        "WARM_GOLD", "GOLDEN_SUNSET" -> Brush.linearGradient(listOf(Color(0xFF2B2218), Color(0xFF5A4324), Color(0xFF191511)))
+        "FOREST", "CYBER_RETRO" -> Brush.linearGradient(listOf(Color(0xFF10241D), Color(0xFF1E4436), Color(0xFF0C1512)))
+        else -> Brush.linearGradient(listOf(Color(0xFF141417), Color(0xFF26231F), Color(0xFF09090B)))
     }
 }
 
@@ -1111,22 +1112,23 @@ fun World1SettingsModal(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Ajustes Generales ⚙️", fontWeight = FontWeight.Black)
+                Text("Ajustes", style = MaterialTheme.typography.titleLarge)
                 IconButton(
                     onClick = {
                         onDismiss()
                         viewModel.showSocialAgentModal.value = true
                     },
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .testTag("open_ai_agent_settings_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.SmartToy,
-                        contentDescription = "Abrir Agente IA desde Ajustes",
-                        tint = MaterialTheme.colorScheme.primary
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Asistente IA",
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -1138,38 +1140,38 @@ fun World1SettingsModal(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Apariencia Red Social:", fontWeight = FontWeight.Bold)
+                Text("Apariencia", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilledTonalButton(
                         onClick = { viewModel.updateThemeMode(ThemeMode.SOCIAL_CLARO) },
-                        modifier = Modifier.weight(1f).height(48.dp)
+                        modifier = Modifier.weight(1f).height(44.dp)
                     ) {
-                        Icon(Icons.Default.LightMode, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.LightMode, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            "Modo Claro",
-                            fontWeight = if (themeMode == ThemeMode.SOCIAL_CLARO) FontWeight.Black else FontWeight.Medium
+                            "Marfil",
+                            fontWeight = if (themeMode == ThemeMode.SOCIAL_CLARO) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                     FilledTonalButton(
                         onClick = { viewModel.updateThemeMode(ThemeMode.SOCIAL_OSCURO) },
-                        modifier = Modifier.weight(1f).height(48.dp)
+                        modifier = Modifier.weight(1f).height(44.dp)
                     ) {
-                        Icon(Icons.Default.DarkMode, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.DarkMode, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            "Modo Oscuro",
-                            fontWeight = if (themeMode == ThemeMode.SOCIAL_OSCURO) FontWeight.Black else FontWeight.Medium
+                            "Obsidiana",
+                            fontWeight = if (themeMode == ThemeMode.SOCIAL_OSCURO) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                Text("Moneda por defecto para Presupuestos:", fontWeight = FontWeight.Bold)
+                Text("Moneda para presupuestos", style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1178,26 +1180,26 @@ fun World1SettingsModal(
                         val isSel = currency == curr
                         Surface(
                             onClick = { viewModel.updateDefaultCurrency(curr) },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f).height(44.dp)
+                            modifier = Modifier.weight(1f).height(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text(curr, fontWeight = FontWeight.ExtraBold)
+                                Text(curr, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Avisos de nuevas salidas y chat", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Notificaciones de salidas", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = notifications,
                         onCheckedChange = { viewModel.setNotificationsEnabled(it) }
@@ -1209,19 +1211,19 @@ fun World1SettingsModal(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Efectos de sonido en Mini-Juegos", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Efectos de sonido en juegos", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = sounds,
                         onCheckedChange = { viewModel.setSoundEffectsEnabled(it) }
                     )
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Text(
-                    text = if (isLoggedIn) "☁️ Cuenta Google: $email" else "☁️ Cuenta Google: No conectada",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
+                    text = if (isLoggedIn) "Cuenta Google: $email" else "Cuenta Google: No conectada",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 OutlinedButton(
@@ -1229,13 +1231,12 @@ fun World1SettingsModal(
                         onDismiss()
                         viewModel.switchToWorld2Bible()
                     },
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
                 ) {
-                    Icon(Icons.Default.MenuBook, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Ir al Mundo 2 (Biblia y Estudio)")
+                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Ir a Estudio Bíblico")
                 }
             }
         },
