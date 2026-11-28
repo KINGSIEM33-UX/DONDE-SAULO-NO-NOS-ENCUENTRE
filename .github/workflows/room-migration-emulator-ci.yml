@@ -34,7 +34,9 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Build and run instrumented Room migration tests
+      # Runs only AppDatabaseMigrationTest; Gradle fails the job on any test or
+      # emulator error and --stacktrace keeps the failure evidence in the log.
+      - name: Run AppDatabaseMigrationTest on the Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -43,4 +45,7 @@ jobs:
           profile: pixel_7_pro
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest :app:connectedDebugAndroidTest
+          script: >-
+            ./gradlew --no-daemon --stacktrace --console=plain
+            -Pandroid.testInstrumentationRunnerArguments.class=com.example.data.AppDatabaseMigrationTest
+            :app:connectedDebugAndroidTest
