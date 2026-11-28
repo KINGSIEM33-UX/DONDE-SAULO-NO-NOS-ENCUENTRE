@@ -306,21 +306,23 @@ fun CalendarScreen(viewModel: MainViewModel) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp)
-                                .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp)),
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                IconButton(onClick = { viewModel.toggleStudyEventCompleted(event) }) {
-                                    Icon(
-                                        imageVector = if (event.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                                        contentDescription = "Marcar completado",
-                                        tint = if (event.completed) Color(0xFF16A34A) else MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                                SpringCheckToggle(
+                                    checked = event.completed,
+                                    onToggle = { viewModel.toggleStudyEventCompleted(event) },
+                                    checkedColor = Color(0xFF1E6B52),
+                                    checkmarkColor = Color.White,
+                                    size = 24.dp
+                                )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(

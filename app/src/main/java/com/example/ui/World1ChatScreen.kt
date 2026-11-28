@@ -553,17 +553,20 @@ fun World1ChatScreen(viewModel: MainViewModel) {
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.GraphicEq,
-                            contentDescription = null,
-                            tint = Color(0xFFEF4444)
+                        VoicePillWaveform(
+                            isActive = true,
+                            barColor = Color(0xFFDC2626),
+                            barCount = 16,
+                            modifier = Modifier.weight(1f).height(26.dp)
                         )
                         Text(
-                            text = "Grabando 0:${recordingSeconds.toString().padStart(2, '0')}",
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFFEF4444)
+                            text = "0:${recordingSeconds.toString().padStart(2, '0')}",
+                            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFDC2626)
                         )
                     }
                     Surface(
@@ -732,15 +735,17 @@ private fun ChatBubbleItem(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "Nota de voz • 0:${message.audioDurationSec.toString().padStart(2, '0')}",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                LinearProgressIndicator(
-                                    progress = { if (isPlaying) playbackProgress else 0f },
-                                    color = contentColor,
-                                    trackColor = contentColor.copy(alpha = 0.25f),
-                                    modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(4.dp))
+                                Spacer(modifier = Modifier.height(5.dp))
+                                VoicePillWaveform(
+                                    isActive = isPlaying,
+                                    barColor = contentColor,
+                                    inactiveBarColor = contentColor.copy(alpha = 0.28f),
+                                    barCount = 20,
+                                    progress = if (isPlaying) playbackProgress else 0f,
+                                    modifier = Modifier.fillMaxWidth().height(20.dp)
                                 )
                             }
                         }

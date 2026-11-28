@@ -165,10 +165,11 @@ fun ProfileScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
+            ShinyEditorialText(
                 text = "Adora",
                 style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
+                baseColor = MaterialTheme.colorScheme.onBackground,
+                shineColor = MaterialTheme.colorScheme.secondary
             )
 
             Row(
@@ -218,114 +219,116 @@ fun ProfileScreen(
             }
         }
 
-        // --- 2. IDENTITY & METRICS CARD ---
-        EditorialCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+        // --- 2. IDENTITY & METRICS CARD (React Bits Spotlight Card + CountUp) ---
+        AnimatedStaggeredItem(index = 0) {
+            SpotlightEditorialCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clickable {
-                                photoPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer)
-                                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
-                            contentAlignment = Alignment.Center
+                                .size(72.dp)
+                                .clickable {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
                         ) {
-                            if (MediaStorageHelper.isRenderableImageUri(profile.avatarUrl)) {
-                                AsyncImage(
-                                    model = MediaStorageHelper.toCoilModel(profile.avatarUrl),
-                                    contentDescription = "Avatar de perfil",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Text(
-                                    text = profile.username.take(1).uppercase(),
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontFamily = FontFamily.Serif,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primaryContainer)
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (MediaStorageHelper.isRenderableImageUri(profile.avatarUrl)) {
+                                    AsyncImage(
+                                        model = MediaStorageHelper.toCoilModel(profile.avatarUrl),
+                                        contentDescription = "Avatar de perfil",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Text(
+                                        text = profile.username.take(1).uppercase(),
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        fontFamily = FontFamily.Serif,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                                    .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Cambiar foto",
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(12.dp)
                                 )
                             }
                         }
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .align(Alignment.BottomEnd)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                                .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
-                            contentAlignment = Alignment.Center
+
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                text = "@${profile.username}",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = profile.groupName,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                            Text(
+                                text = profile.bio,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { showEditProfileDialog = true },
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CameraAlt,
-                                contentDescription = "Cambiar foto",
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(12.dp)
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Editar perfil",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
 
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(
-                            text = "@${profile.username}",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = profile.groupName,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                        Text(
-                            text = profile.bio,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                    IconButton(
-                        onClick = { showEditProfileDialog = true },
-                        modifier = Modifier.size(36.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Editar perfil",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        ProfileMetricColumn(value = outings.size, label = "Salidas", modifier = Modifier.weight(1f))
+                        VerticalDivider(modifier = Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                        ProfileMetricColumn(value = confirmedCount, label = "Confirmadas", modifier = Modifier.weight(1f))
+                        VerticalDivider(modifier = Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                        ProfileMetricColumn(value = profile.gamesHighScore.toInt(), label = "Puntos", modifier = Modifier.weight(1f))
                     }
-                }
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ProfileMetricColumn(value = outings.size.toString(), label = "Salidas", modifier = Modifier.weight(1f))
-                    VerticalDivider(modifier = Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                    ProfileMetricColumn(value = confirmedCount.toString(), label = "Confirmadas", modifier = Modifier.weight(1f))
-                    VerticalDivider(modifier = Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                    ProfileMetricColumn(value = profile.gamesHighScore.toString(), label = "Puntos", modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -798,7 +801,7 @@ fun ProfileScreen(
 
 @Composable
 private fun ProfileMetricColumn(
-    value: String,
+    value: Int,
     label: String,
     modifier: Modifier = Modifier
 ) {
@@ -807,10 +810,9 @@ private fun ProfileMetricColumn(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
+        CountUpText(
+            targetValue = value,
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(

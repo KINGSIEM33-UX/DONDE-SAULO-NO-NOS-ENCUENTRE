@@ -609,7 +609,9 @@ fun BibleReaderScreen(
                                         }
                                     }
                                     if (isGeneratingRawExplanation) {
-                                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                                        ThoughtLineIndicator(
+                                            label = "Analizando contexto histórico y teológico…"
+                                        )
                                     } else if (!rawChapterExplanation.isNullOrBlank()) {
                                         Text(
                                             text = rawChapterExplanation!!,
@@ -655,14 +657,20 @@ fun BibleReaderScreen(
                                             color = MaterialTheme.colorScheme.onBackground,
                                             modifier = Modifier.weight(1f)
                                         )
-                                        if (isFav) {
-                                            Icon(
-                                                imageVector = Icons.Default.Favorite,
-                                                contentDescription = "Favorito",
-                                                tint = Color.Red,
-                                                modifier = Modifier.size(16.dp).padding(top = 4.dp)
-                                            )
-                                        }
+                                        PulseHeartButton(
+                                            liked = isFav,
+                                            onToggle = {
+                                                val existing = favoriteVerses.firstOrNull { it.verseReference == verseRef }
+                                                if (existing != null) {
+                                                    viewModel.deleteFavoriteVerse(existing.id)
+                                                } else {
+                                                    viewModel.saveFavoriteVerse(targetChapterId, verseRef, verse.text)
+                                                }
+                                            },
+                                            activeColor = Color(0xFFB91C1C),
+                                            inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                                            iconSize = 16.dp
+                                        )
                                     }
                                 }
                             }

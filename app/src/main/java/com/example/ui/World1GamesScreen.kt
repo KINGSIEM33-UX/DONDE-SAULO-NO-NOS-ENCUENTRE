@@ -27,7 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -187,7 +187,7 @@ fun World1GamesScreen(viewModel: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(
+                    SplitTextReveal(
                         text = "Juegos",
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onBackground
@@ -215,10 +215,10 @@ fun World1GamesScreen(viewModel: MainViewModel) {
                             tint = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.size(16.dp)
                         )
-                        Text(
-                            text = "${profile.gamesHighScore} pts",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
+                        CountUpText(
+                            targetValue = profile.gamesHighScore.toInt(),
+                            suffix = " pts",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -232,56 +232,58 @@ fun World1GamesScreen(viewModel: MainViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(MINI_GAMES_LIST, key = { it.id }) { game ->
-                    EditorialCard(
-                        onClick = { activeGameId = game.id },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(164.dp)
-                            .testTag("game_card_${game.id}")
-                    ) {
-                        Column(
+                itemsIndexed(MINI_GAMES_LIST, key = { _, g -> g.id }) { index, game ->
+                    AnimatedStaggeredItem(index = index, staggerMs = 40) {
+                        SpotlightEditorialCard(
+                            onClick = { activeGameId = game.id },
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
+                                .fillMaxWidth()
+                                .height(164.dp)
+                                .testTag("game_card_${game.id}")
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.SpaceBetween
                             ) {
-                                EditorialIconBadge(
-                                    icon = game.icon,
-                                    size = 38.dp,
-                                    iconTint = MaterialTheme.colorScheme.secondary
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    EditorialIconBadge(
+                                        icon = game.icon,
+                                        size = 38.dp,
+                                        iconTint = MaterialTheme.colorScheme.secondary
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    ) {
+                                        Text(
+                                            text = game.badge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                     Text(
-                                        text = game.badge,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        text = game.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = game.subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        maxLines = 2
                                     )
                                 }
-                            }
-
-                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text(
-                                    text = game.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = game.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2
-                                )
                             }
                         }
                     }

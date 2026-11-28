@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -137,7 +137,7 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
+                        SplitTextReveal(
                             text = "Salidas",
                             style = MaterialTheme.typography.headlineLarge,
                             color = MaterialTheme.colorScheme.onBackground
@@ -419,20 +419,22 @@ fun World1OutingsScreen(viewModel: MainViewModel) {
                     }
                 }
             } else {
-                items(upcomingOutings, key = { it.id }) { outing ->
-                    EditorialOutingCard(
-                        outing = outing,
-                        currentUserId = currentUserId,
-                        onCardClick = { activeDetailOuting = outing },
-                        onEditClick = {
-                            editingOuting = outing
-                            preselectedDateIso = outing.dateIso
-                            showOutingFormDialog = true
-                        },
-                        onRsvpSelected = { rsvpChoice ->
-                            viewModel.updateOutingRsvp(outing.id, rsvpChoice)
-                        }
-                    )
+                itemsIndexed(upcomingOutings, key = { _, o -> o.id }) { index, outing ->
+                    AnimatedStaggeredItem(index = index) {
+                        EditorialOutingCard(
+                            outing = outing,
+                            currentUserId = currentUserId,
+                            onCardClick = { activeDetailOuting = outing },
+                            onEditClick = {
+                                editingOuting = outing
+                                preselectedDateIso = outing.dateIso
+                                showOutingFormDialog = true
+                            },
+                            onRsvpSelected = { rsvpChoice ->
+                                viewModel.updateOutingRsvp(outing.id, rsvpChoice)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -673,7 +675,7 @@ private fun EditorialOutingCard(
     }
     val userRsvp = outing.rsvpChoiceFor(currentUserId)
 
-    EditorialCard(
+    SpotlightEditorialCard(
         modifier = Modifier.fillMaxWidth(),
         onClick = onCardClick
     ) {
@@ -738,62 +740,33 @@ private fun EditorialOutingCard(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            // Sleek Editorial Segmented RSVP Bar (Asistiré | Duda | No)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                EditorialRsvpSegment(
-                    label = "Asistiré (${outing.rsvpYesCount})",
-                    selected = userRsvp == RsvpChoice.YES,
-                    selectedColor = StatusConfirmedGreen,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onRsvpSelected(RsvpChoice.YES) }
-                )
-                EditorialRsvpSegment(
-                    label = "Duda (${outing.rsvpMaybeCount})",
-                    selected = userRsvp == RsvpChoice.MAYBE,
-                    selectedColor = StatusPlannedGray,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onRsvpSelected(RsvpChoice.MAYBE) }
-                )
-                EditorialRsvpSegment(
-                    label = "No (${outing.rsvpNoCount})",
-                    selected = userRsvp == RsvpChoice.NO,
-                    selectedColor = StatusCancelledRed,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onRsvpSelected(RsvpChoice.NO) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun EditorialRsvpSegment(
-    label: String,
-    selected: Boolean,
-    selectedColor: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(9.dp),
-        color = if (selected) selectedColor else Color.Transparent,
-        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.height(36.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                maxLines = 1
+            // React Bits Micro 2.0 — Rubber Segmented RSVP Bar (Asistiré | Duda | No)
+            RubberSegmentedBar(
+                options = listOf(
+                    RubberSegmentOption(
+                        id = RsvpChoice.YES.name,
+                        label = "Asistiré (${outing.rsvpYesCount})",
+                        activeColor = StatusConfirmedGreen,
+                        activeContentColor = Color.White
+                    ),
+                    RubberSegmentOption(
+                        id = RsvpChoice.MAYBE.name,
+                        label = "Duda (${outing.rsvpMaybeCount})",
+                        activeColor = StatusPlannedGray,
+                        activeContentColor = Color.White
+                    ),
+                    RubberSegmentOption(
+                        id = RsvpChoice.NO.name,
+                        label = "No (${outing.rsvpNoCount})",
+                        activeColor = StatusCancelledRed,
+                        activeContentColor = Color.White
+                    )
+                ),
+                selectedId = userRsvp?.name,
+                onSelect = { id ->
+                    RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpSelected)
+                },
+                height = 40.dp
             )
         }
     }
@@ -853,24 +826,28 @@ fun OutingQuickDetailDialog(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Text("Tu asistencia", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                    EditorialRsvpSegment("Asistiré", userRsvp == RsvpChoice.YES, StatusConfirmedGreen, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.YES) }
-                    EditorialRsvpSegment("Duda", userRsvp == RsvpChoice.MAYBE, StatusPlannedGray, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.MAYBE) }
-                    EditorialRsvpSegment("No", userRsvp == RsvpChoice.NO, StatusCancelledRed, Modifier.weight(1f)) { onRsvpChange(RsvpChoice.NO) }
-                }
+                RubberSegmentedBar(
+                    options = listOf(
+                        RubberSegmentOption(RsvpChoice.YES.name, "Asistiré", StatusConfirmedGreen, Color.White),
+                        RubberSegmentOption(RsvpChoice.MAYBE.name, "Duda", StatusPlannedGray, Color.White),
+                        RubberSegmentOption(RsvpChoice.NO.name, "No", StatusCancelledRed, Color.White)
+                    ),
+                    selectedId = userRsvp?.name,
+                    onSelect = { id -> RsvpChoice.entries.firstOrNull { it.name == id }?.let(onRsvpChange) },
+                    height = 40.dp
+                )
 
                 Text("Estado en el calendario", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = { onStatusChange(OutingStatus.CONFIRMED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                        Text("Confirmada", fontSize = 11.sp)
-                    }
-                    OutlinedButton(onClick = { onStatusChange(OutingStatus.PLANNED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                        Text("Pensada", fontSize = 11.sp)
-                    }
-                    OutlinedButton(onClick = { onStatusChange(OutingStatus.CANCELLED) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                        Text("Cancelada", fontSize = 11.sp)
-                    }
-                }
+                RubberSegmentedBar(
+                    options = listOf(
+                        RubberSegmentOption(OutingStatus.CONFIRMED.name, "Confirmada", StatusConfirmedGreen, Color.White),
+                        RubberSegmentOption(OutingStatus.PLANNED.name, "Pensada", StatusPlannedGray, Color.White),
+                        RubberSegmentOption(OutingStatus.CANCELLED.name, "Cancelada", StatusCancelledRed, Color.White)
+                    ),
+                    selectedId = outing.outingStatus.name,
+                    onSelect = { id -> OutingStatus.entries.firstOrNull { it.name == id }?.let(onStatusChange) },
+                    height = 38.dp
+                )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = onOpenOnMap, modifier = Modifier.weight(1f)) {
@@ -1011,17 +988,18 @@ fun OutingFormDialog(
                 }
 
                 Text("Estado", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                    StatusChoiceChip("Confirmada", selectedStatus == OutingStatus.CONFIRMED, StatusConfirmedGreen, Modifier.weight(1f)) {
-                        selectedStatus = OutingStatus.CONFIRMED
-                    }
-                    StatusChoiceChip("Pensada", selectedStatus == OutingStatus.PLANNED, StatusPlannedGray, Modifier.weight(1f)) {
-                        selectedStatus = OutingStatus.PLANNED
-                    }
-                    StatusChoiceChip("Cancelada", selectedStatus == OutingStatus.CANCELLED, StatusCancelledRed, Modifier.weight(1f)) {
-                        selectedStatus = OutingStatus.CANCELLED
-                    }
-                }
+                RubberSegmentedBar(
+                    options = listOf(
+                        RubberSegmentOption(OutingStatus.CONFIRMED.name, "Confirmada", StatusConfirmedGreen, Color.White),
+                        RubberSegmentOption(OutingStatus.PLANNED.name, "Pensada", StatusPlannedGray, Color.White),
+                        RubberSegmentOption(OutingStatus.CANCELLED.name, "Cancelada", StatusCancelledRed, Color.White)
+                    ),
+                    selectedId = selectedStatus.name,
+                    onSelect = { id ->
+                        OutingStatus.entries.firstOrNull { it.name == id }?.let { selectedStatus = it }
+                    },
+                    height = 40.dp
+                )
 
                 OutlinedTextField(
                     value = budget,
@@ -1067,17 +1045,17 @@ fun OutingFormDialog(
                     }
                 }
 
+                // React Bits Micro 2.0 — Hold Button for safe destructive confirmation
                 if (onDelete != null) {
-                    OutlinedButton(
-                        onClick = onDelete,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusCancelledRed),
-                        border = BorderStroke(1.dp, StatusCancelledRed.copy(alpha = 0.4f)),
-                        modifier = Modifier.fillMaxWidth().height(44.dp)
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Eliminar salida")
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    HoldToConfirmButton(
+                        label = "Mantener para eliminar salida",
+                        doneLabel = "Eliminando…",
+                        icon = Icons.Default.Delete,
+                        fillColor = StatusCancelledRed,
+                        textColor = StatusCancelledRed,
+                        onHoldComplete = onDelete
+                    )
                 }
             }
         },
@@ -1109,25 +1087,4 @@ fun OutingFormDialog(
             TextButton(onClick = onDismiss) { Text("Cancelar") }
         }
     )
-}
-
-@Composable
-private fun StatusChoiceChip(
-    label: String,
-    selected: Boolean,
-    color: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) color else MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.height(38.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
-        }
-    }
 }

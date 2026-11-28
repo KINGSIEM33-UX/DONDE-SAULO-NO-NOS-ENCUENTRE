@@ -821,13 +821,20 @@ private fun FullScreenStoryViewer(
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 12.sp
                 )
-                Button(
-                    onClick = { onLike(story.id) },
-                    shape = RoundedCornerShape(20.dp)
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.Black.copy(alpha = 0.55f),
+                    border = BorderStroke(0.75.dp, Color.White.copy(alpha = 0.25f))
                 ) {
-                    Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.Red)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("${story.likesCount} Me gusta", fontWeight = FontWeight.Bold)
+                    PulseHeartButton(
+                        liked = story.likesCount > 0,
+                        count = story.likesCount.toInt(),
+                        onToggle = { onLike(story.id) },
+                        activeColor = Color(0xFFEF4444),
+                        inactiveColor = Color.White,
+                        iconSize = 20.dp,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
                 }
             }
         }
@@ -1030,13 +1037,10 @@ fun SocialAgentModal(
                     }
                     if (isBusy) {
                         item {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                Text("Ejecutando acción con Gemini...", fontSize = 12.sp)
-                            }
+                            ThoughtLineIndicator(
+                                label = "Analizando y preparando acción…",
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
                         }
                     }
                 }
@@ -1141,56 +1145,32 @@ fun World1SettingsModal(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text("Apariencia", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilledTonalButton(
-                        onClick = { viewModel.updateThemeMode(ThemeMode.SOCIAL_CLARO) },
-                        modifier = Modifier.weight(1f).height(44.dp)
-                    ) {
-                        Icon(Icons.Default.LightMode, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "Marfil",
-                            fontWeight = if (themeMode == ThemeMode.SOCIAL_CLARO) FontWeight.SemiBold else FontWeight.Normal
-                        )
-                    }
-                    FilledTonalButton(
-                        onClick = { viewModel.updateThemeMode(ThemeMode.SOCIAL_OSCURO) },
-                        modifier = Modifier.weight(1f).height(44.dp)
-                    ) {
-                        Icon(Icons.Default.DarkMode, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "Obsidiana",
-                            fontWeight = if (themeMode == ThemeMode.SOCIAL_OSCURO) FontWeight.SemiBold else FontWeight.Normal
-                        )
-                    }
-                }
+                RubberSegmentedBar(
+                    options = listOf(
+                        RubberSegmentOption(id = ThemeMode.SOCIAL_CLARO.name, label = "Marfil"),
+                        RubberSegmentOption(id = ThemeMode.SOCIAL_OSCURO.name, label = "Obsidiana")
+                    ),
+                    selectedId = if (themeMode == ThemeMode.SOCIAL_OSCURO || themeMode == ThemeMode.VIGILIA) {
+                        ThemeMode.SOCIAL_OSCURO.name
+                    } else {
+                        ThemeMode.SOCIAL_CLARO.name
+                    },
+                    onSelect = { selected ->
+                        val next = if (selected == ThemeMode.SOCIAL_OSCURO.name) ThemeMode.SOCIAL_OSCURO else ThemeMode.SOCIAL_CLARO
+                        viewModel.updateThemeMode(next)
+                    },
+                    height = 42.dp
+                )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 Text("Moneda para presupuestos", style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    currencies.forEach { curr ->
-                        val isSel = currency == curr
-                        Surface(
-                            onClick = { viewModel.updateDefaultCurrency(curr) },
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f).height(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(curr, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-                    }
-                }
+                RubberSegmentedBar(
+                    options = currencies.map { RubberSegmentOption(id = it, label = it) },
+                    selectedId = currency,
+                    onSelect = { viewModel.updateDefaultCurrency(it) },
+                    height = 40.dp
+                )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 

@@ -700,8 +700,8 @@ fun LibraryScreen(
             // Study Feed Grid / List
             val scrollState = rememberScrollState()
             Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(scrollState)) {
-            // Editorial Header
-            Text(
+            // Editorial Header (React Bits SplitTextReveal)
+            SplitTextReveal(
                 text = "Estudio Bíblico",
                 style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -715,7 +715,7 @@ fun LibraryScreen(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Daily Verse Component
+            // Daily Verse Component (Spotlight Card + Shiny Editorial label)
             val dailyVerses = listOf(
                 Pair("«Porque yo sé los pensamientos que tengo acerca de vosotros, dice Jehová, pensamientos de paz, y no de mal, para daros el fin que esperáis.»", "Jeremías 29:11"),
                 Pair("«Todo lo puedo en Cristo que me fortalece.»", "Filipenses 4:13"),
@@ -728,13 +728,12 @@ fun LibraryScreen(
             val dayOfYear = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
             val dailyVerse = remember(dayOfYear) { dailyVerses[dayOfYear % dailyVerses.size] }
 
-            Card(
+            SpotlightEditorialCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f))
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                borderColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -747,14 +746,17 @@ fun LibraryScreen(
                                 imageVector = Icons.Default.Star,
                                 contentDescription = "Versículo del Día",
                                 tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Versículo del Día",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.secondary
+                            ShinyEditorialText(
+                                text = "VERSÍCULO DEL DÍA",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 1.2.sp
+                                ),
+                                baseColor = MaterialTheme.colorScheme.secondary,
+                                shineColor = MaterialTheme.colorScheme.onSurface
                             )
                         }
                         val context = LocalContext.current
@@ -803,7 +805,7 @@ fun LibraryScreen(
                     .padding(bottom = 16.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
@@ -853,14 +855,12 @@ fun LibraryScreen(
                 }
             }
 
-            // Bible Dashboard Flotante (Real last-read chapter)
-            Card(
+            // Bible Dashboard Flotante (Spotlight Card — Real last-read chapter)
+            SpotlightEditorialCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(24.dp)
+                    .padding(vertical = 8.dp),
+                cornerRadius = 18.dp
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -871,16 +871,16 @@ fun LibraryScreen(
                         Text(
                             text = "Biblia",
                             style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.Black,
+                            fontWeight = FontWeight.SemiBold,
                             fontFamily = FontFamily.Serif,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Button(
                             onClick = {
                                 onNavigateToBibleReader(lastRecent?.bibleId, lastRecent?.chapterId)
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(if (lastRecent != null) "Continuar" else "Leer")
                         }
@@ -893,7 +893,7 @@ fun LibraryScreen(
                             "Empieza tu lectura hoy en Juan 3 o abre el índice completo"
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -903,51 +903,35 @@ fun LibraryScreen(
                 onClick = { onNavigateToBibleIndex() },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
-                    .padding(vertical = 8.dp)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
+                    .height(54.dp)
+                    .padding(vertical = 6.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(14.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Índice Completo de la Biblia (66 libros)", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Text("Índice Completo de la Biblia (66 libros)", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             }
 
-            // Curated Study Sections + Category Filter + Live Global Search Results
-            Spacer(modifier = Modifier.height(16.dp))
+            // Curated Study Sections + React Bits RubberSegmentedBar Filter
+            Spacer(modifier = Modifier.height(14.dp))
             Text(
                 text = if (searchQuery.isBlank()) "Estudios Guiados y Devocionales" else "Resultados para \"$searchQuery\" (${sections.size})",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = 10.dp)
             )
 
             val categories = listOf("Todos", "Tabernáculo", "Sacerdotes", "Devocional")
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
-            ) {
-                categories.forEach { cat ->
-                    val isSelected = activeCategory.equals(cat, ignoreCase = true)
-                    Surface(
-                        onClick = { viewModel.selectCategory(cat) },
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-                        contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                    ) {
-                        Text(
-                            text = cat,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-            }
+            RubberSegmentedBar(
+                options = categories.map { RubberSegmentOption(id = it, label = it) },
+                selectedId = categories.firstOrNull { it.equals(activeCategory, ignoreCase = true) } ?: "Todos",
+                onSelect = { viewModel.selectCategory(it) },
+                height = 38.dp,
+                modifier = Modifier.padding(bottom = 14.dp)
+            )
 
             if (sections.isEmpty()) {
                 Card(
@@ -966,12 +950,14 @@ fun LibraryScreen(
                     }
                 }
             } else {
-                sections.forEach { sec ->
-                    BibleSectionCard(
-                        item = sec,
-                        onClick = { viewModel.selectSection(sec) },
-                        viewModel = viewModel
-                    )
+                sections.forEachIndexed { idx, sec ->
+                    AnimatedStaggeredItem(index = idx) {
+                        BibleSectionCard(
+                            item = sec,
+                            onClick = { viewModel.selectSection(sec) },
+                            viewModel = viewModel
+                        )
+                    }
                     Spacer(modifier = Modifier.height(10.dp))
                 }
             }
@@ -1019,17 +1005,12 @@ fun LibraryScreen(
 @Composable
 fun BibleSectionCard(item: BibleSection, onClick: () -> Unit, viewModel: MainViewModel) {
     val context = LocalContext.current
-    Card(
+    SpotlightEditorialCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .testTag("bible_item_card_${item.id}")
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            .testTag("bible_item_card_${item.id}"),
+        cornerRadius = 18.dp,
+        onClick = onClick
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1041,7 +1022,7 @@ fun BibleSectionCard(item: BibleSection, onClick: () -> Unit, viewModel: MainVie
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
@@ -1115,24 +1096,17 @@ fun BibleSectionCard(item: BibleSection, onClick: () -> Unit, viewModel: MainVie
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Reading state flag
+                // Reading state flag (React Bits SpringCheckToggle)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .testTag("read_button_${item.id}")
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (item.isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-                            )
-                            .clickable { viewModel.toggleRead(item.id, item.isRead) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (item.isRead) {
-                            Icon(Icons.Default.Check, "Read chapter confirmed", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    SpringCheckToggle(
+                        checked = item.isRead,
+                        onToggle = { viewModel.toggleRead(item.id, item.isRead) },
+                        checkedColor = MaterialTheme.colorScheme.primary,
+                        checkmarkColor = MaterialTheme.colorScheme.onPrimary,
+                        size = 22.dp,
+                        modifier = Modifier.testTag("read_button_${item.id}")
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (item.isRead) "Completado" else "Marcar leído (+50 XP)",
                         fontSize = 11.sp,
@@ -1169,16 +1143,7 @@ fun ReaderPane(
         modifier = Modifier
             .fillMaxSize()
             .testTag("reader_pane")
-            .drawBehind {
-                // Logo background gradient (Blue to Mint)
-                drawRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(Color(0xFF67B8D6), Color(0xFF7EE1B7)),
-                        start = Offset(0f, 0f),
-                        end = Offset(size.width, size.height)
-                    )
-                )
-            }
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Reader Header Navbar
         Row(
@@ -1190,11 +1155,11 @@ fun ReaderPane(
         ) {
             OutlinedButton(
                 onClick = { viewModel.selectSection(null) },
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.testTag("back_to_library_btn").height(48.dp),
-                border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline)
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.testTag("back_to_library_btn").height(44.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Text("← Biblioteca", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Text("← Biblioteca", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             }
 
             Row {
@@ -1238,7 +1203,7 @@ fun ReaderPane(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Beautiful Scripture block quote with subtle left golden-teal border decoration (drawBehind)
+                // Beautiful Scripture block quote with subtle left golden border decoration
                 val currentVersion by viewModel.bibleVersion.collectAsStateWithLifecycle()
                 val contentToDisplay = when (currentVersion) {
                     "NTV" -> if (section.contentNTV.isNotBlank()) section.contentNTV else section.content
@@ -1247,16 +1212,16 @@ fun ReaderPane(
                     else -> section.content
                 }
 
-                val primaryColor = MaterialTheme.colorScheme.primary
+                val accentBorderColor = MaterialTheme.colorScheme.secondary
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .drawBehind {
                             drawLine(
-                                color = primaryColor,
+                                color = accentBorderColor,
                                 start = Offset(0f, 0f),
                                 end = Offset(0f, size.height),
-                                strokeWidth = 12f
+                                strokeWidth = 10f
                             )
                         }
                         .background(MaterialTheme.colorScheme.surface)
@@ -1277,7 +1242,7 @@ fun ReaderPane(
                             Text(
                                 text = "Versión: $version",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
                             Text(
@@ -1300,15 +1265,17 @@ fun ReaderPane(
                 Button(
                     onClick = { viewModel.explainChapter(section) },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(14.dp),
                     enabled = !isGeneratingExplanation
                 ) {
                     if (isGeneratingExplanation) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Analizando capítulo...")
+                        ThoughtLineIndicator(
+                            label = "Analizando capítulo…",
+                            accentColor = MaterialTheme.colorScheme.onPrimary,
+                            textColor = MaterialTheme.colorScheme.onPrimary
+                        )
                     } else {
-                        Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Explicar con IA")
                     }
@@ -1841,24 +1808,10 @@ fun GeminiChatScreen(viewModel: MainViewModel) {
 
             if (isBusy) {
                 item {
-                    Row(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Adora IA está preparando tu respuesta...",
-                            fontStyle = FontStyle.Italic,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                        )
-                    }
+                    ThoughtLineIndicator(
+                        label = "Adora IA está preparando tu respuesta…",
+                        modifier = Modifier.padding(vertical = 6.dp)
+                    )
                 }
             }
         }
@@ -1949,45 +1902,53 @@ fun TriviaAchievementsScreen(viewModel: MainViewModel, points: Int, streak: Int)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Header
+        // Header (React Bits SplitTextReveal)
         item {
-            Text(
+            SplitTextReveal(
                 text = "Conocimiento y Desafíos",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Black,
-                fontFamily = FontFamily.Serif,
-                color = MaterialTheme.colorScheme.primary
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Serif
+                ),
+                color = MaterialTheme.colorScheme.onBackground
             )
             Text(
                 text = "Completa cuestionarios diarios, lee epístolas y desbloquea insignias.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        // Stats Box
+        // Stats Box (React Bits SpotlightEditorialCard + CountUpText)
         item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp)),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(24.dp)
+            SpotlightEditorialCard(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = 18.dp
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(18.dp),
                     horizontalArrangement = Arrangement.SpaceAround
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Puntos Espirituales", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                        Text("$points XP", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                        Text("Puntos Espirituales", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        CountUpText(
+                            targetValue = points,
+                            suffix = " XP",
+                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Racha de Estudio", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                        Text("⚡ $streak Días", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = Color(0xFFD4AF37))
+                        Text("Racha de Estudio", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        CountUpText(
+                            targetValue = streak,
+                            suffix = " días",
+                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
                     }
                 }
             }
